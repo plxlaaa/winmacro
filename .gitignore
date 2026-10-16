@@ -91,7 +91,8 @@
 *.test
 **/target/
 **/go.work
-**/Cargo.lock
+# Cargo.lock 需要入库：cdylib 应用的构建必须可复现
+# **/Cargo.lock
 
 # Ruby
 *.gem
