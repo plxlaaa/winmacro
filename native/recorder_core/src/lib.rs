@@ -4,9 +4,9 @@
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::ffi::{CStr, CString};
-use std::os::raw::{c_char, c_int};
+use std::os::raw::{c_char, c_int, c_void};
 use std::sync::{
-    atomic::{AtomicBool, AtomicI32, Ordering},
+    atomic::{AtomicBool, AtomicI32, AtomicPtr, Ordering},
     Mutex,
 };
 use std::time::Instant;
@@ -134,7 +134,7 @@ mod win_impl {
     use std::time::Duration;
     use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows::Win32::System::Threading::{GetCurrentThreadId, PostThreadMessageW};
+    use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
         KEYEVENTF_KEYUP, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
@@ -142,22 +142,22 @@ mod win_impl {
         MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, VIRTUAL_KEY,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
-        UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL,
-        WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-        WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-        WM_SYSKEYDOWN, WM_SYSKEYUP,
+        CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
+        TranslateMessage, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT,
+        SYSTEM_METRICS_INDEX, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+        WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT,
+        WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
     };
 
-    static mut MOUSE_HOOK: HHOOK = HHOOK(0);
-    static mut KEY_HOOK: HHOOK = HHOOK(0);
+    static MOUSE_HOOK: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+    static KEY_HOOK: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
     static HOOK_THREAD: Mutex<Option<u32>> = Mutex::new(None);
 
     unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if code >= 0 && ENGINE.recording.load(Ordering::SeqCst) {
             let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
             if (info.flags & 0x00000003) != 0 {
-                return CallNextHookEx(HHOOK(0), code, wparam, lparam);
+                return CallNextHookEx(HHOOK::default(), code, wparam, lparam);
             }
             let x = info.pt.x;
             let y = info.pt.y;
@@ -203,7 +203,7 @@ mod win_impl {
                 ENGINE.push(ev);
             }
         }
-        CallNextHookEx(HHOOK(0), code, wparam, lparam)
+        CallNextHookEx(HHOOK::default(), code, wparam, lparam)
     }
 
     fn mouse_btn(kind: &str, button: &str, t: u64, x: i32, y: i32) -> InputEvent {
@@ -224,8 +224,8 @@ mod win_impl {
     unsafe extern "system" fn key_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if code >= 0 && ENGINE.recording.load(Ordering::SeqCst) {
             let info = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-            if (info.flags & 0x00000012) != 0 {
-                return CallNextHookEx(HHOOK(0), code, wparam, lparam);
+            if (info.flags.0 & 0x00000012) != 0 {
+                return CallNextHookEx(HHOOK::default(), code, wparam, lparam);
             }
             let t = ENGINE.elapsed_ms();
             let msg = wparam.0 as u32;
@@ -249,55 +249,49 @@ mod win_impl {
                 });
             }
         }
-        CallNextHookEx(HHOOK(0), code, wparam, lparam)
+        CallNextHookEx(HHOOK::default(), code, wparam, lparam)
     }
 
     fn hook_loop() {
         unsafe {
             let hmod = GetModuleHandleW(None).unwrap_or_default();
-            MOUSE_HOOK = SetWindowsHookExW(
-                WH_MOUSE_LL,
-                Some(mouse_proc),
-                HINSTANCE(hmod.0),
-                0,
-            )
-            .unwrap_or_default();
-            KEY_HOOK = SetWindowsHookExW(
-                WH_KEYBOARD_LL,
-                Some(key_proc),
-                HINSTANCE(hmod.0),
-                0,
-            )
-            .unwrap_or_default();
-            if MOUSE_HOOK.is_invalid() || KEY_HOOK.is_invalid() {
-                if !MOUSE_HOOK.is_invalid() {
-                    let _ = UnhookWindowsHookEx(MOUSE_HOOK);
+            let mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), HINSTANCE(hmod.0), 0)
+                .unwrap_or_default();
+            let key = SetWindowsHookExW(WH_KEYBOARD_LL, Some(key_proc), HINSTANCE(hmod.0), 0)
+                .unwrap_or_default();
+            if mouse.is_invalid() || key.is_invalid() {
+                if !mouse.is_invalid() {
+                    let _ = UnhookWindowsHookEx(mouse);
                 }
-                if !KEY_HOOK.is_invalid() {
-                    let _ = UnhookWindowsHookEx(KEY_HOOK);
+                if !key.is_invalid() {
+                    let _ = UnhookWindowsHookEx(key);
                 }
-                MOUSE_HOOK = HHOOK(0);
-                KEY_HOOK = HHOOK(0);
+                MOUSE_HOOK.store(std::ptr::null_mut(), Ordering::Release);
+                KEY_HOOK.store(std::ptr::null_mut(), Ordering::Release);
                 return;
             }
+            MOUSE_HOOK.store(mouse.0, Ordering::Release);
+            KEY_HOOK.store(key.0, Ordering::Release);
             *HOOK_THREAD.lock().unwrap() = Some(GetCurrentThreadId());
             let mut msg = MSG::default();
             loop {
-                let ret = GetMessageW(&mut msg, HWND(0), 0, 0).0;
+                let ret = GetMessageW(&mut msg, HWND(std::ptr::null_mut()), 0, 0).0;
                 if ret == 0 || ret == -1 {
                     break;
                 }
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
-            if !MOUSE_HOOK.is_invalid() {
-                let _ = UnhookWindowsHookEx(MOUSE_HOOK);
+            let mouse = HHOOK(MOUSE_HOOK.load(Ordering::Acquire));
+            let key = HHOOK(KEY_HOOK.load(Ordering::Acquire));
+            if !mouse.is_invalid() {
+                let _ = UnhookWindowsHookEx(mouse);
             }
-            if !KEY_HOOK.is_invalid() {
-                let _ = UnhookWindowsHookEx(KEY_HOOK);
+            if !key.is_invalid() {
+                let _ = UnhookWindowsHookEx(key);
             }
-            MOUSE_HOOK = HHOOK(0);
-            KEY_HOOK = HHOOK(0);
+            MOUSE_HOOK.store(std::ptr::null_mut(), Ordering::Release);
+            KEY_HOOK.store(std::ptr::null_mut(), Ordering::Release);
             *HOOK_THREAD.lock().unwrap() = None;
         }
     }
@@ -330,10 +324,10 @@ mod win_impl {
         const SM_YVIRTUALSCREEN: i32 = 77;
         const SM_CXVIRTUALSCREEN: i32 = 78;
         const SM_CYVIRTUALSCREEN: i32 = 79;
-        let left = unsafe { windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(SM_XVIRTUALSCREEN) };
-        let top = unsafe { windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(SM_YVIRTUALSCREEN) };
-        let sw = unsafe { windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(SM_CXVIRTUALSCREEN) };
-        let sh = unsafe { windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(SM_CYVIRTUALSCREEN) };
+        let left = unsafe { windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(SYSTEM_METRICS_INDEX(SM_XVIRTUALSCREEN)) };
+        let top = unsafe { windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(SYSTEM_METRICS_INDEX(SM_YVIRTUALSCREEN)) };
+        let sw = unsafe { windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(SYSTEM_METRICS_INDEX(SM_CXVIRTUALSCREEN)) };
+        let sh = unsafe { windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(SYSTEM_METRICS_INDEX(SM_CYVIRTUALSCREEN)) };
         let ax = if sw <= 1 { x } else { (x - left) * NORM / (sw - 1) };
         let ay = if sh <= 1 { y } else { (y - top) * NORM / (sh - 1) };
         (ax, ay)
@@ -342,7 +336,7 @@ mod win_impl {
     fn send_mouse(x: i32, y: i32, flags: u32, mouse_data: i32) {
         const MOUSEEVENTF_VIRTUALDESK: u32 = 0x4000;
         let (ax, ay) = abs_xy(x, y);
-        let mut input = INPUT {
+        let input = INPUT {
             r#type: INPUT_MOUSE,
             Anonymous: INPUT_0 {
                 mi: MOUSEINPUT {
