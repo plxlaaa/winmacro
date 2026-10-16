@@ -33,3 +33,21 @@ scripts\build_native.bat
 - `winmacro/` Python 桌面应用
 - `native/recorder_core/` Rust 录制 / 回放核心（cdylib）
 - `tests/` 录制过滤与数据模型测试
+
+## 开发与测试
+
+Python 单元测试（无 GUI 依赖，CI 已覆盖）：
+
+```bat
+python -m pip install pytest
+python -m pytest tests/
+```
+
+Rust 核心单元测试（含 Python↔Rust JSON 契约测试，需要 Rust 工具链）：
+
+```bat
+cd native\recorder_core
+cargo test
+```
+
+推送到 GitHub 后，`.github/workflows/ci.yml` 会自动运行上述测试，并在 Windows 上执行 `cargo check` 验证原生核心。

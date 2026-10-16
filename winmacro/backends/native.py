@@ -84,7 +84,12 @@ class NativeBackend(RecorderBackend):
     def start(self, on_event: Callable[[InputEvent], None] | None = None) -> None:
         if self.is_recording():
             return
-        self._lib.recorder_start()
+        code = self._lib.recorder_start()
+        if code < 0:
+            # recorder_start returns -1 when the global input hooks could not
+            # be installed (blocked by policy, UIPI, another process, ...).
+            # Fail loudly instead of silently recording nothing.
+            raise RuntimeError(f"原生核心无法安装全局输入钩子（错误码 {code}）")
         self._recording = True
 
     def stop(self) -> list[InputEvent]:

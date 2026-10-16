@@ -11,7 +11,12 @@ use std::sync::{
 };
 use std::time::Instant;
 
-#[derive(Clone, Serialize, Deserialize)]
+// `#[serde(default)]` is required: the Python side (InputEvent.to_dict) omits
+// fields whose value is None, so keys like "button"/"vk" are absent from the
+// JSON payload. Without this attribute, serde rejects missing keys even for
+// Option fields and recorder_play would fail with code -3 on every recording.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct InputEvent {
     pub kind: String,
     pub t_ms: u64,
@@ -297,17 +302,18 @@ mod win_impl {
         }
     }
 
-    pub fn ensure_hooks() {
+    pub fn ensure_hooks() -> bool {
         if HOOK_THREAD.lock().unwrap().is_some() {
-            return;
+            return true;
         }
         thread::spawn(hook_loop);
         for _ in 0..50 {
             if HOOK_THREAD.lock().unwrap().is_some() {
-                break;
+                return true;
             }
             thread::sleep(Duration::from_millis(10));
         }
+        false
     }
 
     pub fn stop_hooks_message() {
@@ -466,7 +472,9 @@ mod win_impl {
 #[cfg(not(windows))]
 mod win_impl {
     use super::*;
-    pub fn ensure_hooks() {}
+    pub fn ensure_hooks() -> bool {
+        true
+    }
     pub fn stop_hooks_message() {}
     pub fn playback(_events: &[InputEvent]) -> i32 {
         -1
@@ -478,10 +486,12 @@ pub extern "C" fn recorder_start() -> c_int {
     if ENGINE.recording.load(Ordering::SeqCst) {
         return 1;
     }
+    if !win_impl::ensure_hooks() {
+        return -1;
+    }
     ENGINE.events.lock().unwrap().clear();
     ENGINE.last_move_ms.store(-999999, Ordering::Relaxed);
     *ENGINE.start.lock().unwrap() = Some(Instant::now());
-    win_impl::ensure_hooks();
     ENGINE.recording.store(true, Ordering::SeqCst);
     0
 }
@@ -520,4 +530,53 @@ pub extern "C" fn recorder_shutdown() {
     ENGINE.recording.store(false, Ordering::SeqCst);
     ENGINE.playing.store(false, Ordering::SeqCst);
     win_impl::stop_hooks_message();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Mirrors the exact payload shape produced by Python's InputEvent.to_dict:
+    // None fields are omitted entirely, so keys are missing from the JSON.
+    #[test]
+    fn accepts_python_json_with_missing_option_fields() {
+        let json = r#"[
+            {"kind":"mouse_move","t_ms":5,"x":100,"y":200},
+            {"kind":"mouse_down","t_ms":12,"x":100,"y":200,"button":"left"},
+            {"kind":"mouse_scroll","t_ms":20,"x":1,"y":2,"dx":0,"dy":120},
+            {"kind":"key_down","t_ms":30,"key":"VK_41","vk":65,"scan":30}
+        ]"#;
+        let events: Vec<InputEvent> =
+            serde_json::from_str(json).expect("python payload must deserialize");
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].button, None);
+        assert_eq!(events[0].vk, None);
+        assert_eq!(events[1].button.as_deref(), Some("left"));
+        assert_eq!(events[2].dy, Some(120));
+        assert_eq!(events[3].vk, Some(65));
+        assert_eq!(events[3].scan, Some(30));
+    }
+
+    // The reverse direction: serialized events (with explicit nulls) must stay
+    // parseable by Python's InputEvent.from_dict, which tolerates null values.
+    #[test]
+    fn serializes_events_with_nulls_for_python() {
+        let ev = InputEvent {
+            kind: "mouse_move".into(),
+            t_ms: 7,
+            x: Some(1),
+            y: Some(2),
+            ..Default::default()
+        };
+        let text = serde_json::to_string(&ev).unwrap();
+        assert!(text.contains("\"kind\":\"mouse_move\""));
+        assert!(text.contains("\"t_ms\":7"));
+        assert!(text.contains("\"button\":null"));
+    }
+
+    #[test]
+    fn malformed_json_reports_error_not_panic() {
+        let parsed: Result<Vec<InputEvent>, _> = serde_json::from_str("not json");
+        assert!(parsed.is_err());
+    }
 }
