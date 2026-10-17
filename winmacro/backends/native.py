@@ -13,27 +13,43 @@ from .base import RecorderBackend
 
 
 def _candidate_paths() -> list[Path]:
-    root = Path(__file__).resolve().parents[2]
     names = []
     if sys.platform == "win32":
         names = ["recorder_core.dll"]
-        folders = [
-            root / "native" / "recorder_core" / "target" / "release",
-            root / "native" / "recorder_core" / "target" / "debug",
-            root / "bin",
-        ]
     else:
         names = ["librecorder_core.so", "librecorder_core.dylib"]
-        folders = [
-            root / "native" / "recorder_core" / "target" / "release",
-            root / "native" / "recorder_core" / "target" / "debug",
-            root / "bin",
-        ]
-    paths: list[Path] = []
+
+    # PyInstaller onedir build: modules live in _internal/, so the
+    # source-tree probing below is useless. Probe next to the exe first.
+    folders: list[Path] = []
+    if getattr(sys, "frozen", False):
+        app_dir = Path(sys.executable).resolve().parent
+        folders.append(app_dir / "bin")
+        folders.append(app_dir)
+
+    root = Path(__file__).resolve().parents[2]
+    if sys.platform == "win32":
+        folders.extend(
+            [
+                root / "native" / "recorder_core" / "target" / "release",
+                root / "native" / "recorder_core" / "target" / "debug",
+                root / "bin",
+            ]
+        )
+    else:
+        folders.extend(
+            [
+                root / "native" / "recorder_core" / "target" / "release",
+                root / "native" / "recorder_core" / "target" / "debug",
+                root / "lib",
+            ]
+        )
+
+    out: list[Path] = []
     for folder in folders:
         for name in names:
-            paths.append(folder / name)
-    return paths
+            out.append(folder / name)
+    return out
 
 
 def find_native_library() -> Path | None:
