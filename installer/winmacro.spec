@@ -8,7 +8,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from PyInstaller.utils.versioninfo import (
+from PyInstaller.utils.win32.versioninfo import (
     FixedFileInfo,
     StringFileInfo,
     StringStruct,
