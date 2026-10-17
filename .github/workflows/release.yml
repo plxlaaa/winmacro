@@ -60,7 +60,7 @@ jobs:
           if (-not $makensis) { $makensis = "makensis" }
           & $makensis /VERSION
           New-Item -ItemType Directory -Force dist | Out-Null
-          & $makensis -DVERSION=${{ steps.ver.outputs.version }} -DPAYLOAD=build/app/WinMacro -DOUTDIR=dist installer/winmacro.nsi
+          & $makensis "-DVERSION=${{ steps.ver.outputs.version }}" "-DPAYLOAD=build/app/WinMacro" "-DOUTDIR=dist" installer/winmacro.nsi
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
