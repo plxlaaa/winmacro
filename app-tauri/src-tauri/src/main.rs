@@ -105,12 +105,12 @@ fn export_recording(state: State<'_, AppState>, id: String, path: String) -> Res
         .find(|r| r.id == id)
         .cloned()
         .ok_or_else(|| "找不到该录制".to_string())?;
-    store::export_recording(&rec, &path)
+    store::export_recording(&rec, &std::path::PathBuf::from(&path))
 }
 
 #[tauri::command]
 fn import_recording(state: State<'_, AppState>, path: String) -> Result<Recording, String> {
-    let rec = store::import_recording(&path)?;
+    let rec = store::import_recording(&std::path::PathBuf::from(&path))?;
     let mut list = state.recordings.lock().unwrap();
     let rec = store::ensure_unique_id(rec, &list);
     list.insert(0, rec.clone());
