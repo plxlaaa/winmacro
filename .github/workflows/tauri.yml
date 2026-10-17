@@ -1,0 +1,44 @@
+name: Tauri Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows installer (Tauri)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app-tauri/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: npm install
+        working-directory: app-tauri
+
+      - name: Rust unit tests (logic + core)
+        run: |
+          cargo test --manifest-path app-tauri/logic/Cargo.toml --verbose
+          cargo test --manifest-path native/recorder_core/Cargo.toml --verbose
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: app-tauri
+          tagName: v__VERSION__
+          releaseName: "WinMacro v__VERSION__"
+          releaseBody: "一键安装版（NSIS 安装器，支持自定义安装路径，卸载请运行安装目录内的 Uninstall.exe）。"
+          releaseDraft: false
+          prerelease: false

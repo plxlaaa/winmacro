@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "recorder_core"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "once_cell",
  "serde",

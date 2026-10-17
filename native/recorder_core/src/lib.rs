@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::{
-    atomic::{AtomicBool, AtomicI32, AtomicPtr, Ordering},
+    atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU32, Ordering},
     Mutex,
 };
 use std::time::Instant;
@@ -44,6 +44,9 @@ struct Engine {
     events: Mutex<Vec<InputEvent>>,
     ignore: Mutex<IgnoreRect>,
     last_move_ms: AtomicI32,
+    /// Hotkeys (e.g. the record-toggle key) whose key_down/key_up must be
+    /// excluded from the recording itself. 0 = disabled.
+    ignore_vk: AtomicU32,
 }
 
 impl Engine {
@@ -60,6 +63,7 @@ impl Engine {
                 h: 0,
             }),
             last_move_ms: AtomicI32::new(-999999),
+            ignore_vk: AtomicU32::new(0),
         }
     }
 
@@ -82,6 +86,13 @@ impl Engine {
     fn push(&self, ev: InputEvent) {
         if !self.recording.load(Ordering::SeqCst) || self.playing.load(Ordering::SeqCst) {
             return;
+        }
+        if ev.kind.starts_with("key") {
+            if let Some(vk) = ev.vk {
+                if (vk as u32) == self.ignore_vk.load(Ordering::Relaxed) {
+                    return;
+                }
+            }
         }
         if let (Some(x), Some(y)) = (ev.x, ev.y) {
             if self.in_ignore(x, y) {
@@ -111,6 +122,13 @@ pub extern "C" fn recorder_set_ignore_rect(x: c_int, y: c_int, w: c_int, h: c_in
     r.y = y;
     r.w = w;
     r.h = h;
+}
+
+/// Hotkey exclusion: while recording, key_down/key_up events for this virtual
+/// key code are dropped (used for the record-toggle hotkey). 0 disables.
+#[no_mangle]
+pub extern "C" fn recorder_set_ignore_vk(vk: u32) {
+    ENGINE.ignore_vk.store(vk, Ordering::Relaxed);
 }
 
 #[no_mangle]
@@ -473,6 +491,35 @@ mod win_impl {
     pub fn playback(_events: &[InputEvent]) -> i32 {
         -1
     }
+}
+
+/// Rust-side helpers shared with the Tauri backend (rlib consumers).
+/// Make the process DPI aware so hook coordinates match physical pixels.
+#[cfg(windows)]
+pub fn ensure_dpi_aware() -> bool {
+    use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
+    unsafe { SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE).is_ok() }
+}
+
+#[cfg(not(windows))]
+pub fn ensure_dpi_aware() -> bool {
+    false
+}
+
+/// Primary screen size in physical pixels (requires a DPI-aware process).
+#[cfg(windows)]
+pub fn primary_screen_size() -> (i32, i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+    unsafe {
+        let w = GetSystemMetrics(SM_CXSCREEN);
+        let h = GetSystemMetrics(SM_CYSCREEN);
+        (w.max(1), h.max(1))
+    }
+}
+
+#[cfg(not(windows))]
+pub fn primary_screen_size() -> (i32, i32) {
+    (0, 0)
 }
 
 #[no_mangle]

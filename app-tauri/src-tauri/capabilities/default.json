@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "主窗口默认权限：核心 API 即可，全局快捷键由 Rust 侧注册",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

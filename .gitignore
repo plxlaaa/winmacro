@@ -175,3 +175,9 @@
 *.lz
 *.lzma
 *.iso
+
+# Tauri / Node
+app-tauri/node_modules/
+app-tauri/dist/
+app-tauri/src-tauri/target/
+app-tauri/src-tauri/gen/
