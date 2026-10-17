@@ -6,7 +6,7 @@ mod hotkeys;
 use std::sync::atomic::Ordering;
 
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_global_shortcut::{Builder as ShortcutBuilder, ShortcutState};
+use tauri_plugin_global_shortcut::Builder as ShortcutBuilder;
 use winmacro_logic::model::{Recording, Settings};
 use winmacro_logic::store;
 
@@ -212,37 +212,8 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 }
 
 fn main() {
-    let shortcuts = ShortcutBuilder::new()
-        .with_handler(|app: &AppHandle, shortcut, event| {
-            if event.state() != ShortcutState::Pressed {
-                return;
-            }
-            let name = shortcut.to_string();
-            let lower = name.to_lowercase();
-            if lower.contains("f10") {
-                engine::toggle_recording(app);
-            } else if lower.contains("f11") {
-                stop_playback(app);
-                let _ = app.emit("play:stopped", ());
-            } else if let Some(id) = hotkeys::find_recording_id(app, &name) {
-                // 脚本热键触发：以 1× 速度、设置页等待秒数执行
-                let state = app.state::<AppState>();
-                let rec = state
-                    .recordings
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .find(|r| r.id == id)
-                    .cloned();
-                if let Some(rec) = rec {
-                    let wait = state.settings.lock().unwrap().wait_seconds;
-                    if let Err(e) = play_recording(app.clone(), rec, 1.0, 1, wait) {
-                        let _ = app.emit("play:error", e);
-                    }
-                }
-            }
-        })
-        .build();
+    // 热键全部由 hotkeys::rebind_all 动态注册（含 F10/F11 保留键）
+    let shortcuts = ShortcutBuilder::new().build();
 
     tauri::Builder::default()
         .plugin(shortcuts)
@@ -273,7 +244,7 @@ fn main() {
         .setup(|app| {
             recorder_core::ensure_dpi_aware();
             setup_tray(app)?;
-            hotkeys::rebind_all(app.handle()).map_err(Box::new)?;
+            hotkeys::rebind_all(app.handle())?;
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
             }
