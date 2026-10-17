@@ -45,12 +45,22 @@ jobs:
           $v = python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
           "version=$v" >> $env:GITHUB_OUTPUT
 
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis -y --no-progress
+
       - name: Build installer (NSIS)
         shell: pwsh
         run: |
-          makensis /VERSION
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\NSIS\makensis.exe",
+            "$env:ProgramFiles\NSIS\makensis.exe"
+          )
+          $makensis = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $makensis) { $makensis = "makensis" }
+          & $makensis /VERSION
           New-Item -ItemType Directory -Force dist | Out-Null
-          makensis -DVERSION=${{ steps.ver.outputs.version }} -DPAYLOAD=build/app/WinMacro -DOUTDIR=dist installer/winmacro.nsi
+          & $makensis -DVERSION=${{ steps.ver.outputs.version }} -DPAYLOAD=build/app/WinMacro -DOUTDIR=dist installer/winmacro.nsi
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
