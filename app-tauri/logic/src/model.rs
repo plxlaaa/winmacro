@@ -51,6 +51,16 @@ impl InputEvent {
     }
 }
 
+/// 校验并规范化事件序列：非空；t_ms 稳定排序恢复时间线。
+/// 返回 Err 时调用方应拒绝保存。
+pub fn sanitize_events(events: &mut Vec<InputEvent>) -> Result<(), String> {
+    if events.is_empty() {
+        return Err("至少保留一个步骤".into());
+    }
+    events.sort_by_key(|e| e.t_ms);
+    Ok(())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Recording {
@@ -108,6 +118,11 @@ impl Recording {
             },
             hotkey: None,
         }
+    }
+
+    /// 依据最后一个事件重算总时长（编辑步骤后调用）。
+    pub fn recompute_duration(&mut self) {
+        self.duration_ms = self.events.last().map(|e| e.t_ms).unwrap_or(0);
     }
 
     pub fn step_count(&self) -> usize {
@@ -311,6 +326,44 @@ mod tests {
         let clean = raw.sanitize();
         assert_eq!(clean.resolution_mode, "auto");
         assert_eq!(clean.wait_seconds, 30);
+    }
+
+    #[test]
+    fn sanitize_events_sorts_and_rejects_empty() {
+        // 空序列拒绝（保存至少一个步骤）
+        assert!(sanitize_events(&mut Vec::new()).is_err());
+
+        // t_ms 乱序：稳定排序恢复时间线
+        let mut evs = vec![
+            InputEvent { kind: "mouse_down".into(), t_ms: 300, x: Some(5), y: Some(5), ..Default::default() },
+            InputEvent { kind: "key_down".into(), t_ms: 100, ..Default::default() },
+            InputEvent { kind: "mouse_up".into(), t_ms: 200, x: Some(5), y: Some(5), ..Default::default() },
+        ];
+        sanitize_events(&mut evs).unwrap();
+        let ts: Vec<u64> = evs.iter().map(|e| e.t_ms).collect();
+        assert_eq!(ts, vec![100, 200, 300]);
+        // 同 t_ms 保持原有相对顺序（稳定排序）
+        let mut same = vec![
+            InputEvent { kind: "key_down".into(), t_ms: 50, key: Some("VK_41".into()), ..Default::default() },
+            InputEvent { kind: "key_down".into(), t_ms: 50, key: Some("VK_42".into()), ..Default::default() },
+        ];
+        sanitize_events(&mut same).unwrap();
+        assert_eq!(same[0].key.as_deref(), Some("VK_41"));
+    }
+
+    #[test]
+    fn recompute_duration_uses_last_event() {
+        let mut rec = Recording::default();
+        rec.duration_ms = 99999;
+        rec.recompute_duration();
+        assert_eq!(rec.duration_ms, 0);
+
+        rec.events = vec![
+            InputEvent { kind: "mouse_down".into(), t_ms: 10, ..Default::default() },
+            InputEvent { kind: "key_down".into(), t_ms: 2500, ..Default::default() },
+        ];
+        rec.recompute_duration();
+        assert_eq!(rec.duration_ms, 2500);
     }
 
     #[test]

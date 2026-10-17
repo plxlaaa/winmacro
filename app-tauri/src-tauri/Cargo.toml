@@ -1,6 +1,6 @@
 [package]
 name = "winmacro-app"
-version = "2.3.0"
+version = "2.4.0"
 description = "WinMacro — Windows macro recorder & player (Tauri backend)"
 edition = "2021"
 

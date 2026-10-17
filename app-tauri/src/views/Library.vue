@@ -8,6 +8,7 @@ import {
 } from "../api";
 import DetailsDialog from "../components/DetailsDialog.vue";
 import HotkeyDialog from "../components/HotkeyDialog.vue";
+import StepEditor from "../components/StepEditor.vue";
 
 const props = defineProps<{ recording: boolean; playing: boolean }>();
 
@@ -93,6 +94,7 @@ async function rename(rec: Recording) {
 }
 
 const hotkeyTarget = ref<Recording | null>(null);
+const editTarget = ref<Recording | null>(null);
 
 async function saveHotkey(hotkey: string | null) {
   const rec = hotkeyTarget.value;
@@ -242,6 +244,7 @@ onUnmounted(() => unlistens.forEach((u) => u()));
         </div>
         <div class="rec-actions" @click.stop>
           <button class="btn sm" @click="details = rec">详情</button>
+          <button class="btn sm" @click="editTarget = rec">✏️ 编辑</button>
           <button class="btn sm ghost" @click="hotkeyTarget = rec">⚡ 热键</button>
           <button class="btn sm ghost" @click="rename(rec)">重命名</button>
           <button class="btn sm ghost" @click="exportJson(rec)">导出</button>
@@ -289,6 +292,16 @@ onUnmounted(() => unlistens.forEach((u) => u()));
       :current="hotkeyTarget.hotkey ?? null"
       @close="hotkeyTarget = null"
       @save="saveHotkey"
+    />
+
+    <StepEditor
+      v-if="editTarget"
+      :recording="editTarget"
+      @close="editTarget = null"
+      @saved="
+        editTarget = null;
+        load();
+      "
     />
   </div>
 </template>

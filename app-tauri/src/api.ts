@@ -69,6 +69,8 @@ export const api = {
     invoke<void>("rename_recording", { id, name }),
   setHotkey: (id: string, hotkey: string | null) =>
     invoke<void>("set_hotkey", { id, hotkey }),
+  updateRecordingEvents: (id: string, events: InputEvent[]) =>
+    invoke<void>("update_recording_events", { id, events }),
   isRecording: () => invoke<boolean>("is_recording"),
   isPlaying: () => invoke<boolean>("is_playing"),
   beginRecording: () => invoke<void>("begin_recording"),

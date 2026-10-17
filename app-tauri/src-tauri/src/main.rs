@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_global_shortcut::Builder as ShortcutBuilder;
-use winmacro_logic::model::{Recording, Settings};
+use winmacro_logic::model::{Recording, Settings, sanitize_events};
 use winmacro_logic::store;
 
 use engine::{play_recording, start_recording, stop_playback, stop_recording, AppState};
@@ -167,6 +167,27 @@ fn set_hotkey(
 }
 
 #[tauri::command]
+fn update_recording_events(
+    state: State<'_, AppState>,
+    id: String,
+    events: Vec<winmacro_logic::model::InputEvent>,
+) -> Result<(), String> {
+    let mut events = events;
+    sanitize_events(&mut events)?;
+    if events.len() > 200_000 {
+        return Err("事件数超出上限（200000）".into());
+    }
+    let mut list = state.recordings.lock().unwrap();
+    let rec = list
+        .iter_mut()
+        .find(|r| r.id == id)
+        .ok_or_else(|| "找不到该录制".to_string())?;
+    rec.events = events;
+    rec.recompute_duration();
+    store::save_recordings(&list)
+}
+
+#[tauri::command]
 fn screen_size() -> (i32, i32) {
     recorder_core::primary_screen_size()
 }
@@ -239,6 +260,7 @@ fn main() {
             export_recording,
             import_recording,
             set_hotkey,
+            update_recording_events,
             screen_size,
         ])
         .setup(|app| {
