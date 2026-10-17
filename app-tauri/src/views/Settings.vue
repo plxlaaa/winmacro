@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
+import { enable as enableAutostart, disable as disableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
 import { api, type Settings } from "../api";
 import {
   checkForUpdate,
@@ -20,11 +21,26 @@ const s = ref<Settings>({
   hide_on_play: true,
   record_mouse_move: true,
   auto_check_updates: true,
+  close_to_tray: true,
 });
 const saved = ref(false);
 const screenText = ref("—");
 const appVersion = ref("");
 const isLatest = ref(false);
+const autostartOn = ref(false);
+
+async function toggleAutostart() {
+  try {
+    if (autostartOn.value) {
+      await enableAutostart();
+    } else {
+      await disableAutostart();
+    }
+  } catch (e) {
+    alert(String(e));
+    autostartOn.value = !autostartOn.value;
+  }
+}
 
 const RESOLUTIONS: Array<[number, number, string]> = [
   [1280, 720, "HD 720p"],
@@ -72,6 +88,9 @@ onMounted(async () => {
   api.screenSize()
     .then(([w, h]) => (screenText.value = w ? `${w}×${h}` : "未知"))
     .catch(() => (screenText.value = "未知"));
+  autostartEnabled()
+    .then((v) => (autostartOn.value = v))
+    .catch(() => (autostartOn.value = false));
 });
 </script>
 
@@ -178,6 +197,32 @@ onMounted(async () => {
     </div>
 
     <div class="stat-card" style="margin-bottom: 22px">
+      <div class="form-row">
+        <div>
+          <div class="form-label">关闭按钮最小化到托盘</div>
+          <div class="form-hint">
+            点窗口 ✕ 时隐藏到系统托盘（F10 热键录制仍可用），托盘右键菜单可退出。关闭则真正退出程序。
+          </div>
+        </div>
+        <label class="switch">
+          <input v-model="s.close_to_tray" type="checkbox" />
+          <span class="track"></span>
+          <span class="thumb"></span>
+        </label>
+      </div>
+
+      <div class="form-row">
+        <div>
+          <div class="form-label">开机自动启动</div>
+          <div class="form-hint">登录 Windows 后自动运行 WinMacro 并驻留托盘，随时可热键执行脚本。</div>
+        </div>
+        <label class="switch">
+          <input v-model="autostartOn" type="checkbox" @change="toggleAutostart" />
+          <span class="track"></span>
+          <span class="thumb"></span>
+        </label>
+      </div>
+
       <div class="form-row">
         <div>
           <div class="form-label">应用更新</div>

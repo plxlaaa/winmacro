@@ -2,5 +2,12 @@
   "identifier": "default",
   "description": "主窗口默认权限：核心 API + 应用内更新（检查/下载/安装/重启）",
   "windows": ["main"],
-  "permissions": ["core:default", "updater:default", "process:allow-restart"]
+  "permissions": [
+    "core:default",
+    "updater:default",
+    "process:allow-restart",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled"
+  ]
 }

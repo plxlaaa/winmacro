@@ -23,6 +23,7 @@ export interface Recording {
   screen_width: number;
   screen_height: number;
   resolution_mode: string;
+  hotkey?: string | null;
 }
 
 export interface Settings {
@@ -33,6 +34,7 @@ export interface Settings {
   hide_on_play: boolean;
   record_mouse_move: boolean;
   auto_check_updates: boolean;
+  close_to_tray: boolean;
 }
 
 export const KIND_LABELS: Record<string, string> = {
@@ -65,6 +67,8 @@ export const api = {
   deleteRecording: (id: string) => invoke<void>("delete_recording", { id }),
   renameRecording: (id: string, name: string) =>
     invoke<void>("rename_recording", { id, name }),
+  setHotkey: (id: string, hotkey: string | null) =>
+    invoke<void>("set_hotkey", { id, hotkey }),
   isRecording: () => invoke<boolean>("is_recording"),
   isPlaying: () => invoke<boolean>("is_playing"),
   beginRecording: () => invoke<void>("begin_recording"),

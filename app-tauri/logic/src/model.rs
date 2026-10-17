@@ -62,6 +62,9 @@ pub struct Recording {
     pub screen_width: i32,
     pub screen_height: i32,
     pub resolution_mode: String,
+    /// 用户为该录制分配的全局快捷键（如 "Control+Alt+1"）。None = 未分配。
+    #[serde(default)]
+    pub hotkey: Option<String>,
 }
 
 impl Default for Recording {
@@ -75,6 +78,7 @@ impl Default for Recording {
             screen_width: 0,
             screen_height: 0,
             resolution_mode: String::from("auto"),
+            hotkey: None,
         }
     }
 }
@@ -102,6 +106,7 @@ impl Recording {
             } else {
                 resolution_mode.into()
             },
+            hotkey: None,
         }
     }
 
@@ -145,6 +150,8 @@ pub struct Settings {
     pub record_mouse_move: bool,
     /// 启动后是否自动检查应用更新（3 秒后静默检查）。
     pub auto_check_updates: bool,
+    /// 点击窗口关闭按钮时最小化到系统托盘而不是退出。
+    pub close_to_tray: bool,
 }
 
 impl Default for Settings {
@@ -157,6 +164,7 @@ impl Default for Settings {
             hide_on_play: true,
             record_mouse_move: true,
             auto_check_updates: true,
+            close_to_tray: true,
         }
     }
 }
@@ -270,6 +278,25 @@ mod tests {
         let back: Settings =
             serde_json::from_str(&serde_json::to_string(&s2).unwrap()).unwrap();
         assert!(!back.auto_check_updates);
+    }
+
+    #[test]
+    fn hotkey_field_is_backward_compatible() {
+        // 旧版 recordings.json 无 hotkey 字段：反序列化为 None
+        let legacy: Vec<Recording> = serde_json::from_str(
+            r#"[{"id":"a1","name":"旧","created_at":"2026-01-01","duration_ms":5,
+                "events":[{"kind":"mouse_down","t_ms":1,"x":1,"y":1,"button":"left"}],
+                "screen_width":1920,"screen_height":1080,"resolution_mode":"auto"}]"#,
+        )
+        .unwrap();
+        assert_eq!(legacy[0].hotkey, None);
+
+        // 设置热键后序列化/反序列化往返保持
+        let mut rec = legacy.into_iter().next().unwrap();
+        rec.hotkey = Some("Control+Alt+1".into());
+        let back: Recording =
+            serde_json::from_str(&serde_json::to_string(&rec).unwrap()).unwrap();
+        assert_eq!(back.hotkey.as_deref(), Some("Control+Alt+1"));
     }
 
     #[test]

@@ -7,6 +7,7 @@ import {
   type Recording,
 } from "../api";
 import DetailsDialog from "../components/DetailsDialog.vue";
+import HotkeyDialog from "../components/HotkeyDialog.vue";
 
 const props = defineProps<{ recording: boolean; playing: boolean }>();
 
@@ -89,6 +90,34 @@ async function rename(rec: Recording) {
   if (!name || !name.trim()) return;
   await api.renameRecording(rec.id, name.trim());
   await load();
+}
+
+const hotkeyTarget = ref<Recording | null>(null);
+
+async function saveHotkey(hotkey: string | null) {
+  const rec = hotkeyTarget.value;
+  if (!rec) return;
+  hotkeyTarget.value = null;
+  try {
+    await api.setHotkey(rec.id, hotkey);
+    await load();
+  } catch (e) {
+    alert(String(e));
+  }
+}
+
+const HK_PRETTY: Record<string, string> = {
+  Control: "Ctrl",
+  Alt: "Alt",
+  Shift: "Shift",
+  Meta: "Win",
+};
+function prettyHk(spec: string | null | undefined): string {
+  if (!spec) return "";
+  return spec
+    .split("+")
+    .map((p) => HK_PRETTY[p] ?? p)
+    .join("+");
 }
 
 function exportJson(rec: Recording) {
@@ -198,7 +227,12 @@ onUnmounted(() => unlistens.forEach((u) => u()));
       >
         <div class="rec-icon">▶</div>
         <div class="rec-main">
-          <div class="rec-name">{{ rec.name }}</div>
+          <div class="rec-name">
+            {{ rec.name }}
+            <span v-if="rec.hotkey" class="hk-badge" title="点击修改热键" @click.stop="hotkeyTarget = rec">
+              ⚡ {{ prettyHk(rec.hotkey) }}
+            </span>
+          </div>
           <div class="rec-meta">
             <span>{{ rec.created_at.replace("T", " ") }}</span>
             <span>{{ rec.events.length.toLocaleString() }} 步</span>
@@ -208,6 +242,7 @@ onUnmounted(() => unlistens.forEach((u) => u()));
         </div>
         <div class="rec-actions" @click.stop>
           <button class="btn sm" @click="details = rec">详情</button>
+          <button class="btn sm ghost" @click="hotkeyTarget = rec">⚡ 热键</button>
           <button class="btn sm ghost" @click="rename(rec)">重命名</button>
           <button class="btn sm ghost" @click="exportJson(rec)">导出</button>
           <button class="btn sm danger" @click="remove(rec)">删除</button>
@@ -246,5 +281,13 @@ onUnmounted(() => unlistens.forEach((u) => u()));
     </div>
 
     <DetailsDialog v-if="details" :recording="details" @close="details = null" />
+
+    <HotkeyDialog
+      v-if="hotkeyTarget"
+      :name="hotkeyTarget.name"
+      :current="hotkeyTarget.hotkey ?? null"
+      @close="hotkeyTarget = null"
+      @save="saveHotkey"
+    />
   </div>
 </template>
