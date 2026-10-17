@@ -271,7 +271,8 @@ onUnmounted(() => unlistens.forEach((u) => u()));
         <button class="btn primary" :disabled="!selected || playing" @click="play">
           ▶ 执行选中
         </button>
-        <button class="btn danger" v-if="playing" @click="stop">■ 停止（F11）</button>
+        <button class="btn danger" v-if="playing" @click="stop">■ 紧急停止（Esc）</button>
+        <span v-if="playing" style="color: var(--danger)">脚本回放中，任意时刻按 Esc 立即停止</span>
         <span v-if="playLoop" style="color: var(--accent)">第 {{ playLoop.done }} / {{ playLoop.total }} 轮</span>
       </template>
     </div>

@@ -115,6 +115,15 @@ static ENGINE: Lazy<Engine> = Lazy::new(Engine::new);
 static LAST_JSON: Lazy<Mutex<CString>> =
     Lazy::new(|| Mutex::new(CString::new("[]").unwrap()));
 
+/// 紧急停止判定：回放期间、真人（非注入）按下 Esc。
+/// 提取为纯函数以便跨平台单测。VK_ESCAPE = 0x1B。
+pub fn is_emergency_stop(playing: bool, msg: u32, vk: u32, injected: bool) -> bool {
+    const WM_KEYDOWN: u32 = 0x0100;
+    const WM_SYSKEYDOWN: u32 = 0x0104;
+    const VK_ESCAPE: u32 = 0x1B;
+    playing && !injected && vk == VK_ESCAPE && (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
+}
+
 #[no_mangle]
 pub extern "C" fn recorder_set_ignore_rect(x: c_int, y: c_int, w: c_int, h: c_int) {
     let mut r = ENGINE.ignore.lock().unwrap();
@@ -240,31 +249,47 @@ mod win_impl {
     }
 
     unsafe extern "system" fn key_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        if code >= 0 && ENGINE.recording.load(Ordering::SeqCst) {
+        if code >= 0 {
             let info = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-            if (info.flags.0 & 0x00000012) != 0 {
-                return CallNextHookEx(HHOOK::default(), code, wparam, lparam);
+            let injected = (info.flags.0 & 0x00000012) != 0;
+
+            // 紧急停止：回放期间真人按下 Esc → 立即断流，并吞掉该事件，
+            // 防止 Esc 被「正在被操作的程序」响应。
+            if is_emergency_stop(
+                ENGINE.playing.load(Ordering::SeqCst),
+                wparam.0 as u32,
+                info.vkCode,
+                injected,
+            ) {
+                ENGINE.playing.store(false, Ordering::SeqCst);
+                return LRESULT(1);
             }
-            let t = ENGINE.elapsed_ms();
-            let msg = wparam.0 as u32;
-            let kind = match msg {
-                WM_KEYDOWN | WM_SYSKEYDOWN => "key_down",
-                WM_KEYUP | WM_SYSKEYUP => "key_up",
-                _ => "",
-            };
-            if !kind.is_empty() {
-                ENGINE.push(InputEvent {
-                    kind: kind.into(),
-                    t_ms: t,
-                    x: None,
-                    y: None,
-                    button: None,
-                    key: Some(format!("VK_{:02X}", info.vkCode)),
-                    dx: None,
-                    dy: None,
-                    vk: Some(info.vkCode as u16),
-                    scan: Some(info.scanCode as u16),
-                });
+
+            if ENGINE.recording.load(Ordering::SeqCst) {
+                if injected {
+                    return CallNextHookEx(HHOOK::default(), code, wparam, lparam);
+                }
+                let t = ENGINE.elapsed_ms();
+                let msg = wparam.0 as u32;
+                let kind = match msg {
+                    WM_KEYDOWN | WM_SYSKEYDOWN => "key_down",
+                    WM_KEYUP | WM_SYSKEYUP => "key_up",
+                    _ => "",
+                };
+                if !kind.is_empty() {
+                    ENGINE.push(InputEvent {
+                        kind: kind.into(),
+                        t_ms: t,
+                        x: None,
+                        y: None,
+                        button: None,
+                        key: Some(format!("VK_{:02X}", info.vkCode)),
+                        dx: None,
+                        dy: None,
+                        vk: Some(info.vkCode as u16),
+                        scan: Some(info.scanCode as u16),
+                    });
+                }
             }
         }
         CallNextHookEx(HHOOK::default(), code, wparam, lparam)
@@ -579,6 +604,25 @@ mod tests {
 
     // Mirrors the exact payload shape produced by Python's InputEvent.to_dict:
     // None fields are omitted entirely, so keys are missing from the JSON.
+    #[test]
+    fn emergency_stop_only_for_real_human_esc_during_playback() {
+        const WM_KEYDOWN: u32 = 0x0100;
+        const WM_KEYUP: u32 = 0x0101;
+        const VK_ESCAPE: u32 = 0x1B;
+        const VK_A: u32 = 0x41;
+
+        // 回放中真人按 Esc → 触发
+        assert!(is_emergency_stop(true, WM_KEYDOWN, VK_ESCAPE, false));
+        // 非回放状态（含录制中）不触发：Esc 保持原语义
+        assert!(!is_emergency_stop(false, WM_KEYDOWN, VK_ESCAPE, false));
+        // 脚本注入的 Esc（SendInput 带 INJECTED 标志）不触发：脚本可正常回放 Esc 键
+        assert!(!is_emergency_stop(true, WM_KEYDOWN, VK_ESCAPE, true));
+        // 回放中真人的其他键不触发
+        assert!(!is_emergency_stop(true, WM_KEYDOWN, VK_A, false));
+        // Esc 松开事件不触发（避免 key_up 二次处理）
+        assert!(!is_emergency_stop(true, WM_KEYUP, VK_ESCAPE, false));
+    }
+
     #[test]
     fn accepts_python_json_with_missing_option_fields() {
         let json = r#"[

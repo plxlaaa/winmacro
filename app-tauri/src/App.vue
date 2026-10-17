@@ -67,7 +67,7 @@ onMounted(async () => {
       </div>
       <div class="sidebar-foot">
         <span class="hint-kbd">F10</span> 开始 / 结束录制<br />
-        <span class="hint-kbd">F11</span> 停止回放
+        <span class="hint-kbd">Esc</span> / <span class="hint-kbd">F11</span> 紧急停止
       </div>
     </aside>
     <main class="main">
