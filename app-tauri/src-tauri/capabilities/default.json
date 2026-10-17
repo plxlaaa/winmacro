@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "主窗口默认权限：核心 API 即可，全局快捷键由 Rust 侧注册",
+  "description": "主窗口默认权限：核心 API + 应用内更新（检查/下载/安装/重启）",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "updater:default", "process:allow-restart"]
 }

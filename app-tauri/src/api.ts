@@ -32,6 +32,7 @@ export interface Settings {
   wait_seconds: number;
   hide_on_play: boolean;
   record_mouse_move: boolean;
+  auto_check_updates: boolean;
 }
 
 export const KIND_LABELS: Record<string, string> = {

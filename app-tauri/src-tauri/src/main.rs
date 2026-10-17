@@ -143,6 +143,8 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(shortcuts)
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             list_recordings,

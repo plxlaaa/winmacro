@@ -143,6 +143,8 @@ pub struct Settings {
     pub hide_on_play: bool,
     /// 是否记录鼠标移动轨迹；关闭后仅记录点击、滚轮与键盘。
     pub record_mouse_move: bool,
+    /// 启动后是否自动检查应用更新（3 秒后静默检查）。
+    pub auto_check_updates: bool,
 }
 
 impl Default for Settings {
@@ -154,6 +156,7 @@ impl Default for Settings {
             wait_seconds: 3,
             hide_on_play: true,
             record_mouse_move: true,
+            auto_check_updates: true,
         }
     }
 }
@@ -251,6 +254,22 @@ mod tests {
         assert_eq!(rec.name, "旧数据");
         assert_eq!(rec.step_count(), 1);
         assert_eq!(rec.resolution_text(), "1920×1080");
+    }
+
+    #[test]
+    fn auto_check_updates_setting() {
+        let s = Settings::default();
+        assert!(s.auto_check_updates);
+        // 旧版 settings.json 没有该字段：struct 级 #[serde(default)] 取容器
+        // Default impl → 老用户默认开启自动检查
+        let legacy: Settings = serde_json::from_str(r#"{"resolution_mode":"auto"}"#).unwrap();
+        assert!(legacy.auto_check_updates);
+        // 关闭后保存/加载往返保持
+        let mut s2 = Settings::default();
+        s2.auto_check_updates = false;
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&s2).unwrap()).unwrap();
+        assert!(!back.auto_check_updates);
     }
 
     #[test]

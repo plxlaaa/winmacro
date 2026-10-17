@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { api, onEvent } from "./api";
+import { checkForUpdate, showUpdateDialog, updateInfo } from "./updater";
 import Library from "./views/Library.vue";
 import SettingsView from "./views/Settings.vue";
+import UpdateDialog from "./components/UpdateDialog.vue";
 
 const page = ref<"library" | "settings">("library");
 const recording = ref(false);
@@ -23,6 +25,19 @@ onMounted(async () => {
   await onEvent("play:started", () => (playing.value = true));
   await onEvent("play:done", () => (playing.value = false));
   await onEvent("play:stopped", () => (playing.value = false));
+
+  // 启动 3 秒后按设置静默检查更新
+  try {
+    const s = await api.getSettings();
+    if (s.auto_check_updates) {
+      setTimeout(async () => {
+        const u = await checkForUpdate();
+        if (u) showUpdateDialog.value = true;
+      }, 3000);
+    }
+  } catch {
+    /* 更新检查失败不打扰用户 */
+  }
 });
 </script>
 
@@ -59,5 +74,12 @@ onMounted(async () => {
       <Library v-if="page === 'library'" :recording="recording" :playing="playing" />
       <SettingsView v-else @saved="refreshFlags" />
     </main>
+
+    <UpdateDialog
+      v-if="showUpdateDialog && updateInfo"
+      :version="updateInfo.version"
+      :notes="updateInfo.body"
+      @close="showUpdateDialog = false"
+    />
   </div>
 </template>

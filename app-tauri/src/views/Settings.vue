@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
+import { getVersion } from "@tauri-apps/api/app";
 import { api, type Settings } from "../api";
+import {
+  checkForUpdate,
+  updateChecking,
+  updateError,
+  updateInfo,
+  showUpdateDialog,
+} from "../updater";
 
 const emit = defineEmits<{ (e: "saved"): void }>();
 
@@ -11,9 +19,12 @@ const s = ref<Settings>({
   wait_seconds: 3,
   hide_on_play: true,
   record_mouse_move: true,
+  auto_check_updates: true,
 });
 const saved = ref(false);
 const screenText = ref("—");
+const appVersion = ref("");
+const isLatest = ref(false);
 
 const RESOLUTIONS: Array<[number, number, string]> = [
   [1280, 720, "HD 720p"],
@@ -43,8 +54,21 @@ async function save() {
   }
 }
 
+async function manualCheck() {
+  isLatest.value = false;
+  const u = await checkForUpdate();
+  if (u) {
+    showUpdateDialog.value = true;
+  } else if (!updateError.value) {
+    isLatest.value = true;
+  }
+}
+
 onMounted(async () => {
   s.value = await api.getSettings();
+  getVersion()
+    .then((v) => (appVersion.value = v))
+    .catch(() => (appVersion.value = "未知"));
   api.screenSize()
     .then(([w, h]) => (screenText.value = w ? `${w}×${h}` : "未知"))
     .catch(() => (screenText.value = "未知"));
@@ -100,6 +124,20 @@ onMounted(async () => {
 
       <div class="form-row">
         <div>
+          <div class="form-label">自动检查更新</div>
+          <div class="form-hint">
+            启动 3 秒后静默检查一次 GitHub Releases；发现新版本时弹窗提示，也可在下方手动检查。
+          </div>
+        </div>
+        <label class="switch">
+          <input v-model="s.auto_check_updates" type="checkbox" />
+          <span class="track"></span>
+          <span class="thumb"></span>
+        </label>
+      </div>
+
+      <div class="form-row">
+        <div>
           <div class="form-label">录制分辨率</div>
           <div class="form-hint">
             回放时把录制坐标映射到当前屏幕（当前：{{ screenText }}）。换显示器分辨率后回放依然落点准确。
@@ -135,6 +173,29 @@ onMounted(async () => {
         <div style="color: var(--muted); display: flex; gap: 14px">
           <span><span class="hint-kbd">F10</span> 开始 / 结束录制</span>
           <span><span class="hint-kbd">F11</span> 停止回放</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stat-card" style="margin-bottom: 22px">
+      <div class="form-row">
+        <div>
+          <div class="form-label">应用更新</div>
+          <div class="form-hint">
+            当前版本 v{{ appVersion || "…" }}。更新包经 minisign 签名校验后静默安装，全程无需浏览器。
+          </div>
+        </div>
+        <div class="form-control">
+          <button class="btn" :disabled="updateChecking" @click="manualCheck">
+            {{ updateChecking ? "检查中…" : "检查更新" }}
+          </button>
+          <span v-if="isLatest && !updateInfo" style="color: var(--ok)">✓ 已是最新版本</span>
+          <span v-if="updateInfo" style="color: var(--accent)">
+            可更新到 v{{ updateInfo.version }}
+          </span>
+          <span v-if="updateError" style="color: var(--danger); font-size: 12px">
+            {{ updateError }}
+          </span>
         </div>
       </div>
     </div>
