@@ -1,4 +1,4 @@
-; ============================================================
+﻿; ============================================================
 ; WinMacro 安装器（NSIS 3.x / Unicode）
 ; 构建方式（仓库根目录）：
 ;   makensis -DVERSION=1.1.0 -DPAYLOAD=build/app/WinMacro installer/winmacro.nsi
