@@ -284,11 +284,13 @@ fn still_current(app: &AppHandle, token: u64) -> bool {
 /// 非 Windows：永远 None（logic crate 自动回退到全屏缩放）。
 #[cfg(windows)]
 fn lookup_window_bounds(hwnd: u32) -> Option<WindowBounds> {
+    use recorder_core::WinOk;
     use windows::Win32::Foundation::{HWND, RECT};
     unsafe {
         let h = HWND(hwnd as *mut std::ffi::c_void);
         let mut rect = RECT::default();
-        if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut rect).is_ok() {
+        // 0.58 返回 BOOL、0.59+ 返回 Result，用 .win_ok() 兼容两者
+        if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut rect).win_ok() {
             Some(WindowBounds {
                 x: rect.left,
                 y: rect.top,

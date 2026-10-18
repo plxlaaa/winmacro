@@ -130,6 +130,40 @@ static ENGINE: Lazy<Engine> = Lazy::new(Engine::new);
 static LAST_JSON: Lazy<Mutex<CString>> =
     Lazy::new(|| Mutex::new(CString::new("[]").unwrap()));
 
+/// 兼容 `windows` crate 不同版本里 Win32 API 的返回类型差异。
+///
+/// - **0.58**（本项目锁定的版本）：多数 Win32 API 返回 `BOOL`
+///   （`i32` newtype，0 = 失败，非 0 = 成功）
+/// - **0.59+**：其中一部分改回 `Result<(), Error>`
+///
+/// 同一个 crate 里两种返回类型**混用**（例如 `ScreenToClient` 返回 BOOL，
+/// 而 `SetProcessDpiAwareness` 返回 Result），所以不能统一改写调用点。
+/// 这个 trait 让两种类型都能用同一个 `.win_ok()` 判断成功与否，
+/// **从而对 crate 版本升级免疫**。
+#[cfg(windows)]
+pub trait WinOk {
+    /// true = 调用成功
+    fn win_ok(&self) -> bool;
+}
+
+#[cfg(windows)]
+impl WinOk for windows::Win32::Foundation::BOOL {
+    #[inline]
+    fn win_ok(&self) -> bool {
+        self.0 != 0
+    }
+}
+
+/// 泛型 blanket impl：任何错误类型的 `Result<(), E>` 都适用，
+/// 这样不需要在代码里指名 `windows::core::Error`（0.58 / 0.59 路径不同）。
+#[cfg(windows)]
+impl<E> WinOk for Result<(), E> {
+    #[inline]
+    fn win_ok(&self) -> bool {
+        self.is_ok()
+    }
+}
+
 /// Optional playback progress callback, called after each event with
 /// `(index, total)`. Set via `recorder_set_progress_cb`; pass `null` to clear.
 ///
@@ -232,9 +266,8 @@ mod win_impl {
                 return (None, None, None);
             }
             let mut pt = POINT { x, y };
-            // windows 0.58: ScreenToClient 返回 BOOL (i32 newtype)，
-            // 非零 = 成功，零 = 失败。As 不到 Result，所以用 .0 != 0。
-            if ScreenToClient(hwnd, &mut pt).0 != 0 {
+            // 0.58 返回 BOOL、0.59+ 返回 Result，用 .win_ok() 兼容两者
+            if ScreenToClient(hwnd, &mut pt).win_ok() {
                 (Some(hwnd.0 as u32), Some(pt.x), Some(pt.y))
             } else {
                 (Some(hwnd.0 as u32), None, None)
@@ -609,7 +642,8 @@ mod win_impl {
 #[cfg(windows)]
 pub fn ensure_dpi_aware() -> bool {
     use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
-    unsafe { SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE).0 != 0 }
+    // 0.58 这个 API 返回 Result（不是 BOOL），用 .win_ok() 兼容
+    unsafe { SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE).win_ok() }
 }
 
 #[cfg(not(windows))]
