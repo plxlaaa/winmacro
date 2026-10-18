@@ -232,7 +232,9 @@ mod win_impl {
                 return (None, None, None);
             }
             let mut pt = POINT { x, y };
-            if ScreenToClient(hwnd, &mut pt).is_ok() {
+            // windows 0.58: ScreenToClient 返回 BOOL (i32 newtype)，
+            // 非零 = 成功，零 = 失败。As 不到 Result，所以用 .0 != 0。
+            if ScreenToClient(hwnd, &mut pt).0 != 0 {
                 (Some(hwnd.0 as u32), Some(pt.x), Some(pt.y))
             } else {
                 (Some(hwnd.0 as u32), None, None)
@@ -607,7 +609,7 @@ mod win_impl {
 #[cfg(windows)]
 pub fn ensure_dpi_aware() -> bool {
     use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
-    unsafe { SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE).is_ok() }
+    unsafe { SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE).0 != 0 }
 }
 
 #[cfg(not(windows))]
