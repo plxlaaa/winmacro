@@ -76,6 +76,8 @@ impl Engine {
         }
     }
 
+    /// 当前录制启动后的毫秒数。在 Linux 编译单元（非 win_impl）里无引用。
+    #[cfg_attr(not(windows), allow(dead_code))]
     fn elapsed_ms(&self) -> u64 {
         self.start
             .lock()
@@ -84,6 +86,8 @@ impl Engine {
             .unwrap_or(0)
     }
 
+    /// 点 (x, y) 是否落在忽略矩形内。Linux 无引用。
+    #[cfg_attr(not(windows), allow(dead_code))]
     fn in_ignore(&self, x: i32, y: i32) -> bool {
         let r = self.ignore.lock().unwrap();
         if r.w <= 0 || r.h <= 0 {
@@ -92,6 +96,8 @@ impl Engine {
         x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h
     }
 
+    /// 把事件追加到 events vector。Linux 无引用。
+    #[cfg_attr(not(windows), allow(dead_code))]
     fn push(&self, ev: InputEvent) {
         if !self.recording.load(Ordering::SeqCst) || self.playing.load(Ordering::SeqCst) {
             return;
@@ -140,6 +146,7 @@ pub extern "C" fn recorder_set_progress_cb(cb: Option<ProgressCb>) {
     PROGRESS_CB.store(ptr, Ordering::Release);
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 #[inline]
 fn emit_progress(index: u32, total: u32) {
     let ptr = PROGRESS_CB.load(Ordering::Acquire);
@@ -193,7 +200,8 @@ mod win_impl {
     use super::*;
     use std::thread;
     use std::time::Duration;
-    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+    use windows::Win32::Graphics::Gdi::ScreenToClient;
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -203,12 +211,11 @@ mod win_impl {
         MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, VIRTUAL_KEY,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMessageW, GetWindowRect,
-        PostThreadMessageW, ScreenToClient, SetWindowsHookExW, TranslateMessage,
-        UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, SYSTEM_METRICS_INDEX,
-        WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
-        WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN,
-        WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+        CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMessageW, PostThreadMessageW,
+        SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG,
+        MSLLHOOKSTRUCT, SYSTEM_METRICS_INDEX, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP,
+        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+        WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
     };
 
     static MOUSE_HOOK: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
@@ -360,6 +367,9 @@ mod win_impl {
                         dy: None,
                         vk: Some(info.vkCode as u16),
                         scan: Some(info.scanCode as u16),
+                        target_hwnd: None,
+                        win_x: None,
+                        win_y: None,
                     });
                 }
             }
