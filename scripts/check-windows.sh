@@ -42,11 +42,22 @@ echo
 echo "[3/5] cargo check --target $TARGET - recorder_core ..."
 cargo check --target "$TARGET" --all-targets \
     --manifest-path "$ROOT/native/recorder_core/Cargo.toml"
-
 echo
-echo "[4/5] cargo check --target $TARGET - src-tauri （较慢，Tauri 依赖树大）..."
-cargo check --target "$TARGET" \
-    --manifest-path "$ROOT/app-tauri/src-tauri/Cargo.toml"
+
+echo "[4/5] Windows target 编译检查 - src-tauri （较慢，Tauri 依赖树大）..."
+# src-tauri 依赖 webview2-com-sys（要编 C 代码），Linux 上必须用 cargo-xwin，
+# 否则会报 "failed to find tool lib.exe"。xwin 会自动下载 Windows SDK + CRT。
+if command -v cargo-xwin >/dev/null 2>&1; then
+    echo "      使用 cargo-xwin（检测到 $(cargo xwin --version 2>/dev/null | head -1)）"
+    cargo xwin check --target "$TARGET" \
+        --manifest-path "$ROOT/app-tauri/src-tauri/Cargo.toml"
+else
+    echo "      ⚠ 未检测到 cargo-xwin，src-tauri 含 C 依赖，普通 cargo check 会失败。"
+    echo "      安装：cargo install cargo-xwin --locked"
+    echo "      （首次会下载 ~1.1GB Windows SDK/CRT）"
+    echo "      需要 clang-cl / llvm-lib：见 docs/CI-WINDOWS-CHECK.md §1"
+    exit 1
+fi
 echo
 
 # --- 3. 前端类型检查 + JS 单测 ---------------------------------------------

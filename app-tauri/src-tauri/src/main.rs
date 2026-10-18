@@ -5,7 +5,7 @@ mod hotkeys;
 
 use std::sync::atomic::Ordering;
 
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_global_shortcut::Builder as ShortcutBuilder;
 use winmacro_logic::model::{Recording, Settings, sanitize_events};
 use winmacro_logic::store;

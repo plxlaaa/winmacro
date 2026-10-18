@@ -39,15 +39,75 @@ cargo check --target x86_64-pc-windows-msvc
 
 `cargo check` **不做链接**，所以 Linux 上不需要 MSVC 链接器。
 
+### ⚠️ 有 C 依赖的 crate 需要 `cargo-xwin`
+
+`app-tauri/src-tauri` 依赖 `webview2-com-sys`，它要编 C 代码，
+普通 `cargo check` 会卡在：
+
+```
+error occurred in cc-rs: failed to find tool "lib.exe": No such file or directory
+```
+
+解法是 [`cargo-xwin`](https://github.com/rust-cross/cargo-xwin)——
+它自动下载 Windows SDK + CRT 并配置好交叉编译环境：
+
+```bash
+cargo install cargo-xwin --locked
+
+# 用 xwin 跑
+cargo xwin check --target x86_64-pc-windows-msvc \
+    --manifest-path app-tauri/src-tauri/Cargo.toml
+```
+
+**首次会下载 ~1.1 GB 的 Windows SDK/CRT**（缓存在 `~/.cache/cargo-xwin`），之后就是增量编译。
+
+### xwin 的额外前置：clang-cl + llvm-lib
+
+`cargo-xwin` 默认用 `clang-cl` 编译 C 代码、用 `llvm-lib` 建 import library。
+Linux 发行版的 LLVM 包默认不带 `clang-cl`，需要自己补：
+
+```bash
+# Debian / Ubuntu
+apt-get install -y clang lld llvm-14 llvm-14-tools
+
+# Debian 的 clang 不带 clang-cl 驱动，但 `clang --driver-mode=cl` 完全等价。
+# 顺带把 xwin 缓存的 SDK/CRT 头文件路径注进去，
+# 这样 cc-rs 的 "detect compiler family" 探测也能过（否则只是一条告警）。
+cat > /usr/local/bin/clang-cl <<'EOF'
+#!/bin/sh
+XWIN_CACHE="${XWIN_CACHE:-$HOME/.cache/cargo-xwin/xwin}"
+if [ -d "$XWIN_CACHE/crt/include" ]; then
+  exec /usr/lib/llvm-14/bin/clang --driver-mode=cl \
+    --target=x86_64-pc-windows-msvc -fuse-ld=lld-link \
+    /imsvc "$XWIN_CACHE/crt/include" \
+    /imsvc "$XWIN_CACHE/sdk/include/ucrt" \
+    /imsvc "$XWIN_CACHE/sdk/include/um" \
+    /imsvc "$XWIN_CACHE/sdk/include/shared" \
+    /imsvc "$XWIN_CACHE/sdk/include/winrt" \
+    "$@"
+fi
+exec /usr/lib/llvm-14/bin/clang --driver-mode=cl "$@"
+EOF
+chmod +x /usr/local/bin/clang-cl
+
+# 确保 llvm-14 的 bin 在 PATH 里（llvm-lib / llvm-rc / llvm-ar 都在这）
+export PATH=/usr/lib/llvm-14/bin:$PATH
+```
+
+> **Fedora / RHEL** 用 `dnf install clang clang-tools-extra lld llvm`，
+> 自带 `clang-cl`，跳过 wrapper 那步即可。
+
 ### 本项目的两个 crate
 
 ```bash
-# 核心库（快，1-2 秒）
+# 核心库（纯 Rust，普通 cargo check 就够，1-2 秒）
 cargo check --target x86_64-pc-windows-msvc --manifest-path native/recorder_core/Cargo.toml
 
-# Tauri 后端（慢，Tauri 依赖树巨大，第一次要十几分钟）
-cargo check --target x86_64-pc-windows-msvc --manifest-path app-tauri/src-tauri/Cargo.toml
+# Tauri 后端（有 C 依赖，必须用 xwin；第一次十几分钟，之后增量）
+cargo xwin check --target x86_64-pc-windows-msvc --manifest-path app-tauri/src-tauri/Cargo.toml
 ```
+
+或直接用一键脚本（见 §6）：`scripts/check-windows.sh`
 
 ## 2. 加速：配置国内镜像
 
@@ -178,7 +238,8 @@ if SetProcessDpiAwareness(PROCESS_SYSTEM_DPI_AWARE).win_ok() { ... }
 | 检查项 | 本地 Linux | CI (windows-latest) |
 |---|---|---|
 | Rust Linux target 编译 | ✅ 秒级 | ✅ |
-| Rust Windows target 编译 | ✅ 需 msvc target | ✅ |
+| Rust Windows target 编译（纯 Rust crate） | ✅ 需 msvc target | ✅ |
+| Rust Windows target 编译（含 C 依赖，如 src-tauri） | ✅ 需 cargo-xwin | ✅ |
 | Rust 单元测试（Linux） | ✅ | ✅ |
 | Rust 单元测试（Windows） | ❌ 跑不了（需 Windows 运行时） | ✅ |
 | Vue/TS 类型检查 | ✅ `npx vue-tsc --noEmit` | ✅ |
@@ -197,7 +258,7 @@ cargo test --manifest-path native/recorder_core/Cargo.toml
 
 # 2. Windows target 编译检查（抓 cfg(windows) 的错）
 cargo check --target x86_64-pc-windows-msvc --manifest-path native/recorder_core/Cargo.toml
-cargo check --target x86_64-pc-windows-msvc --manifest-path app-tauri/src-tauri/Cargo.toml
+cargo xwin check --target x86_64-pc-windows-msvc --manifest-path app-tauri/src-tauri/Cargo.toml
 
 # 3. 前端类型检查 + 单测
 cd app-tauri
@@ -208,7 +269,15 @@ npm run test:js
 pip install -r requirements.txt pytest && pytest tests/
 ```
 
-**只做 1+2 就能覆盖 v2.5.0 那 4 轮失败中的前 3 轮**（第 4 轮是 TS，步骤 3 覆盖）。
+**只做 1+2 就能覆盖 v2.5.0 那 5 轮失败中的全部**（第 1-4 轮是 Windows 编译错，
+第 5 轮是 src-tauri 的 borrow 错——只有 2 的 xwin 那条能抓到）。
+
+一键脚本：
+
+```bash
+scripts/check-windows.sh      # Linux / macOS
+scripts\check-windows.bat     # Windows
+```
 
 ## 7. 打 tag 时的注意事项
 

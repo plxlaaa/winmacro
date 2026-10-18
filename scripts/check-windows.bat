@@ -1,11 +1,15 @@
 @echo off
 REM ===========================================================================
-REM  Windows 编译预检（可在 Linux / macOS / Windows 上跑）
+REM  Windows 编译预检（Windows 版）
 REM
 REM  用途：在推 tag 之前，一次性抓出所有 Windows-only 的编译错误，
 REM        避免等 CI 跑 10 分钟才发现 #[cfg(windows)] 里的问题。
 REM
 REM  用法：scripts\check-windows.bat
+REM
+REM  注意：本脚本需要 Windows + MSVC 工具链（Visual Studio Build Tools）。
+REM        在 Linux / macOS 上请改用 scripts/check-windows.sh，
+REM        那个版本会走 cargo-xwin 方案处理含 C 依赖的 crate。
 REM ===========================================================================
 setlocal enabledelayedexpansion
 
