@@ -28,6 +28,37 @@ cd ../../app-tauri/logic && cargo test
 cd ../../ && pip install -r requirements.txt pytest && pytest tests/
 ```
 
+## ⚠️ 推 tag 之前：Windows 编译预检
+
+WinMacro 是 Windows 应用，但 `#[cfg(windows)]` 的代码**在 Linux/macOS 上根本不参与编译**——
+`cargo check` 通过 ≠ Windows 能编译。踩过的坑见 [docs/CI-WINDOWS-CHECK.md](docs/CI-WINDOWS-CHECK.md)。
+
+**一条命令跑完全部检查**（Linux/macOS）：
+
+```bash
+scripts/check-windows.sh
+```
+
+或 Windows 上：
+
+```bat
+scripts\check-windows.bat
+```
+
+它会依次跑：Rust 单元测试 → `cargo check --target x86_64-pc-windows-msvc`（抓 Windows-only 编译错）
+→ `vue-tsc --noEmit` → JS 单测。
+
+**手动等价命令**：
+
+```bash
+rustup target add x86_64-pc-windows-msvc
+cargo test --manifest-path app-tauri/logic/Cargo.toml
+cargo test --manifest-path native/recorder_core/Cargo.toml
+cargo check --target x86_64-pc-windows-msvc --manifest-path native/recorder_core/Cargo.toml
+cargo check --target x86_64-pc-windows-msvc --manifest-path app-tauri/src-tauri/Cargo.toml
+cd app-tauri && npx vue-tsc --noEmit && npm run test:js
+```
+
 ## 提交规范
 
 格式：`<type>(<scope>): <subject>`

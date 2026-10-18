@@ -141,8 +141,12 @@ pub fn play_recording(
         stop_playback(&app);
     }
     let hide = state.settings.lock().unwrap().hide_on_play;
+    // 注意：`state` 借用了 `app`，而下面的 `move` closure 需要 `'static`，
+    // 所以所有设置项必须在 closure **外面**读成独立的值再捕获。
+    let use_anchor = state.settings.lock().unwrap().use_window_anchor;
     let token = state.play_token.fetch_add(1, Ordering::SeqCst) + 1;
     state.playing.store(true, Ordering::SeqCst);
+    drop(state);
 
     if hide {
         hide_main(&app);
@@ -172,7 +176,6 @@ pub fn play_recording(
         // remap to the current screen (or to the original window's current position),
         // then apply speed
         let (cw, ch) = recorder_core::primary_screen_size();
-        let use_anchor = state.settings.lock().unwrap().use_window_anchor;
         let remapped = if use_anchor {
             remap_to_anchor(
                 &recording.events,
