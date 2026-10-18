@@ -2,6 +2,7 @@
 //! (`sanitize_events` / `_drop_start_release`).
 
 use crate::model::{InputEvent, KIND_MOUSE_MOVE, KIND_MOUSE_UP};
+use crate::simplify::{simplify_moves, SimplifyLevel};
 
 /// Collapse autorepeat / duplicate events and drop unpaired releases.
 pub fn sanitize_events(events: &[InputEvent]) -> Vec<InputEvent> {
@@ -78,11 +79,17 @@ pub fn drop_start_release(events: Vec<InputEvent>) -> Vec<InputEvent> {
 /// Full pipeline applied when a recording session is saved.
 /// `keep_moves == false` drops every mouse_move sample (轨迹关闭：
 /// 只保留点击、滚轮与键盘).
-pub fn finalize(raw: Vec<InputEvent>, keep_moves: bool) -> Vec<InputEvent> {
+/// `simplify_level` 在保留 move 时再做 Douglas-Peucker 折线压缩。
+/// `Off` 等价于跳过简化。
+pub fn finalize(
+    raw: Vec<InputEvent>,
+    keep_moves: bool,
+    simplify_level: SimplifyLevel,
+) -> Vec<InputEvent> {
     let events = drop_start_release(raw);
     let events = sanitize_events(&events);
     if keep_moves {
-        events
+        simplify_moves(events, simplify_level)
     } else {
         events
             .into_iter()
@@ -158,7 +165,7 @@ mod tests {
             InputEvent { kind: KIND_KEY_DOWN.into(), t_ms: 120, vk: Some(0x41), ..Default::default() },
             ev("mouse_up", 200, Some(200), Some(100), Some("left")),
         ];
-        let out = finalize(raw, false);
+        let out = finalize(raw, false, SimplifyLevel::Medium);
         assert!(out.iter().all(|e| e.kind != "mouse_move"));
         assert_eq!(out.len(), 4); // down + scroll + key_down + up
     }
@@ -166,7 +173,34 @@ mod tests {
     #[test]
     fn finalize_with_moves_keeps_moves() {
         let raw = vec![ev("mouse_move", 20, Some(100), Some(100), None)];
-        let out = finalize(raw, true);
+        let out = finalize(raw, true, SimplifyLevel::Off);
         assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn finalize_with_high_simplify_keeps_only_endpoints() {
+        // 100 个共线 move + 起始 1 个 leading up 应被 drop_start_release 去掉
+        // 然后 100 个共线点 → 只剩 2 个端点
+        let mut raw: Vec<InputEvent> = (0..100)
+            .map(|i| ev("mouse_move", i * 5, Some(i as i32), Some(0), None))
+            .collect();
+        // 在最前面塞一个会被 drop_start_release 去掉的 mouse_up
+        raw.insert(
+            0,
+            ev("mouse_up", 5, Some(0), Some(0), Some("left")),
+        );
+        let out = finalize(raw, true, SimplifyLevel::High);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].x, Some(0));
+        assert_eq!(out[1].x, Some(99));
+    }
+
+    #[test]
+    fn finalize_off_simplify_is_passthrough() {
+        let raw: Vec<InputEvent> = (0..50)
+            .map(|i| ev("mouse_move", i * 2, Some(i as i32), Some(0), None))
+            .collect();
+        let out = finalize(raw.clone(), true, SimplifyLevel::Off);
+        assert_eq!(out.len(), raw.len());
     }
 }

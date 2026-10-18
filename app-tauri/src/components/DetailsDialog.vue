@@ -7,17 +7,39 @@ import {
   type Recording,
   type InputEvent,
 } from "../api";
+import Timeline from "./Timeline.vue";
 
 const props = defineProps<{ recording: Recording }>();
 const emit = defineEmits<{ (e: "close"): void }>();
 
 const PAGE = 500;
 const page = ref(0);
+const currentMs = ref<number | null>(null);
 
 const shown = computed(() =>
   props.recording.events.slice(0, page.value * PAGE + PAGE),
 );
 const hasMore = computed(() => shown.value.length < props.recording.events.length);
+
+/** 跳到指定 t_ms 附近的事件（向下取最接近的事件下标） */
+function seek(tMs: number) {
+  if (!props.recording.events.length) return;
+  // 二分找第一个 t_ms >= target 的事件
+  let lo = 0;
+  let hi = props.recording.events.length - 1;
+  let target = props.recording.events.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (props.recording.events[mid].t_ms >= tMs) {
+      target = mid;
+      hi = mid - 1;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  // 翻到包含 target 的页
+  page.value = Math.floor(target / PAGE);
+}
 
 function timeText(ev: InputEvent): string {
   return (ev.t_ms / 1000).toFixed(2) + "s";
@@ -36,6 +58,8 @@ function extraText(ev: InputEvent): string {
   if (ev.kind === "key_down" || ev.kind === "key_up") return ev.key ?? "—";
   return "";
 }
+
+defineExpose({ setCurrentMs: (ms: number | null) => (currentMs.value = ms) });
 </script>
 
 <template>
@@ -49,6 +73,20 @@ function extraText(ev: InputEvent): string {
         {{ recording.created_at.replace("T", " ") }} · {{ recording.events.length.toLocaleString() }} 步 ·
         {{ fmtDuration(recording.duration_ms) }} ·
         分辨率 {{ recording.screen_width ? `${recording.screen_width}×${recording.screen_height}` : "未记录" }}
+      </div>
+      <div style="padding: 0 22px 14px">
+        <Timeline
+          :events="recording.events"
+          :duration-ms="recording.duration_ms"
+          :current-ms="currentMs"
+          @seek="seek"
+        />
+        <div style="color: var(--faint); font-size: 11px; margin-top: 4px; line-height: 1.5">
+          点击时间轴跳转到对应步骤；颜色：<span style="color: rgba(96,165,250,0.9)">移动</span> ·
+          <span style="color: rgba(239,68,68,0.9)">点击</span> ·
+          <span style="color: rgba(168,85,247,0.9)">滚轮</span> ·
+          <span style="color: rgba(34,197,94,0.9)">键盘</span>
+        </div>
       </div>
       <div class="dialog-body">
         <table class="steps">

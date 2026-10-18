@@ -22,6 +22,8 @@ const s = ref<Settings>({
   record_mouse_move: true,
   auto_check_updates: true,
   close_to_tray: true,
+  trajectory_simplify: "medium",
+  use_window_anchor: true,
 });
 const saved = ref(false);
 const screenText = ref("—");
@@ -136,6 +138,49 @@ onMounted(async () => {
         </div>
         <label class="switch">
           <input v-model="s.record_mouse_move" type="checkbox" />
+          <span class="track"></span>
+          <span class="thumb"></span>
+        </label>
+      </div>
+
+      <div class="form-row">
+        <div>
+          <div class="form-label">轨迹精度</div>
+          <div class="form-hint">
+            录制完成后对鼠标移动路径做 Douglas-Peucker 折线简化（仅影响体积与速度，不影响点击命中）。
+            <span style="color: var(--muted)">
+              当前：{{
+                s.trajectory_simplify === "off" ? "不简化" :
+                s.trajectory_simplify === "low" ? "极致（0.5 px）" :
+                s.trajectory_simplify === "high" ? "粗略（4 px）" :
+                "推荐（1.5 px）"
+              }}
+            </span>
+          </div>
+        </div>
+        <div class="form-control">
+          <select
+            :value="s.trajectory_simplify"
+            @change="s.trajectory_simplify = ($event.target as HTMLSelectElement).value as Settings['trajectory_simplify']"
+          >
+            <option value="off">不简化</option>
+            <option value="low">极致（0.5 px）</option>
+            <option value="medium">推荐（1.5 px）</option>
+            <option value="high">粗略（4 px）</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div>
+          <div class="form-label">窗口锚定回放</div>
+          <div class="form-hint">
+            回放时优先按录制时的目标窗口定位（窗口移动了脚本也跟着走）。窗口已关闭则回退到全屏缩放。
+            关闭后始终使用 v2.4 的全屏映射（旧行为）。
+          </div>
+        </div>
+        <label class="switch">
+          <input v-model="s.use_window_anchor" type="checkbox" />
           <span class="track"></span>
           <span class="thumb"></span>
         </label>

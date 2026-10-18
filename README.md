@@ -1,6 +1,23 @@
 # WinMacro
 
-Windows 脚本制作与执行工具。**Tauri 2 + Vue 3** 现代桌面 UI + Rust 高性能键鼠核心（v2.0 起重写，跨平台 UI 框架）。
+> **轻量 Windows 宏录制与回放工具** —— Tauri 2 + Vue 3 现代桌面 UI，Rust 高性能键鼠核心。
+
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/plxlaaa/winmacro)](https://github.com/plxlaaa/winmacro/releases/latest)
+[![Windows](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d4.svg)]()
+[![Rust](https://img.shields.io/badge/rust-1.99%2B-orange.svg)]()
+[![Tauri 2](https://img.shields.io/badge/Tauri-2.0-24c8db.svg)]()
+[![Vue 3](https://img.shields.io/badge/Vue-3.4-42b883.svg)]()
+
+**F10 一键开始录制，再按 F10 结束**——以整个屏幕为范围记录键盘鼠标操作（热键本身不会录进脚本），可绑定全局快捷键回放，倍速、循环、倒计时、隐藏界面全支持。
+
+## 为什么用 WinMacro
+
+- **一键录制**：`F10` 开始 / 结束，`F11` 紧急停止回放
+- **零依赖**：单文件 NSIS 安装器（≈ 5 MB），内嵌 WebView2 + Rust 核心
+- **安全更新**：minisign 签名校验的自动更新器
+- **可移植脚本**：录制库 JSON 格式可导出 / 导入
+- **现代 UI**：Tauri 2 + Vue 3，资源占用 < 30 MB
 
 ## 功能
 

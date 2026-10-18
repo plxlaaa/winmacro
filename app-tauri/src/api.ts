@@ -35,6 +35,8 @@ export interface Settings {
   record_mouse_move: boolean;
   auto_check_updates: boolean;
   close_to_tray: boolean;
+  trajectory_simplify: "off" | "low" | "medium" | "high";
+  use_window_anchor: boolean;
 }
 
 export const KIND_LABELS: Record<string, string> = {

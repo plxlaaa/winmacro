@@ -3,7 +3,9 @@
 
 pub mod filter;
 pub mod model;
+pub mod simplify;
 pub mod store;
 pub mod transform;
 
 pub use model::{InputEvent, Recording, Settings};
+pub use simplify::SimplifyLevel;

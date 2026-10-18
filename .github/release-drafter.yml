@@ -1,0 +1,42 @@
+# Release Drafter: 自动把 PR/Commit 收进下一个 release 的说明
+# 推送 v* 标签后由 release.yml 使用
+# 完整文档：https://github.com/release-drafter/release-drafter
+
+name-template: 'WinMacro v$RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+version-resolver:
+  major:
+    labels: ['breaking', 'major']
+  minor:
+    labels: ['feat', 'enhancement']
+  patch:
+    labels: ['fix', 'bug', 'docs', 'chore']
+  default: minor
+
+categories:
+  - title: '⚠️ 破坏性变更'
+    labels: ['breaking', 'major']
+  - title: '🚀 新功能'
+    labels: ['feat', 'enhancement']
+  - title: '🐛 修 Bug'
+    labels: ['fix', 'bug']
+  - title: '📝 文档'
+    labels: ['docs']
+  - title: '🧹 杂项'
+    labels: ['chore', 'refactor', 'perf']
+  - title: '🤖 自动化 / CI'
+    labels: ['ci']
+change-template: '- $TITLE (#$NUMBER) @$AUTHOR'
+
+template: |
+  ## 变更
+
+  $CHANGES
+
+  ## 安装
+
+  下载下方 `WinMacro_$RESOLVED_VERSION_x64-setup.exe`（约 5 MB），双击运行即可升级。
+
+  校验：`.exe.sig` 是 minisign 签名，详情见仓库 [更新器实现](https://github.com/plxlaaa/winmacro)。
+
+  **完整变更日志**：[CHANGELOG.md](https://github.com/plxlaaa/winmacro/blob/master/CHANGELOG.md)

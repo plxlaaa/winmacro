@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::simplify::SimplifyLevel;
+
 pub const KIND_MOUSE_MOVE: &str = "mouse_move";
 pub const KIND_MOUSE_DOWN: &str = "mouse_down";
 pub const KIND_MOUSE_UP: &str = "mouse_up";
@@ -14,6 +16,11 @@ pub const KIND_KEY_UP: &str = "key_up";
 /// One recorded input event. Field-for-field compatible with the Python
 /// `InputEvent.to_dict()` payload, where None-valued keys are omitted
 /// entirely — hence `#[serde(default)]` on the struct.
+///
+/// v2.5+ 增三个可选字段用于**窗口锚定回放**：
+/// - `target_hwnd`: 录制时该事件命中的前台窗口句柄（Win32 HWND 整数）
+/// - `win_x`, `win_y`: 该事件在窗口客户区的坐标
+/// - 缺这些字段时回退到全屏缩放（见 transform::remap_to_anchor）
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InputEvent {
@@ -27,6 +34,15 @@ pub struct InputEvent {
     pub dy: Option<i32>,
     pub vk: Option<u16>,
     pub scan: Option<u16>,
+    /// Win32 窗口句柄（`HWND as u32`）。仅 Windows 录制时有值。
+    #[serde(default)]
+    pub target_hwnd: Option<u32>,
+    /// 该事件在 `target_hwnd` 客户区内的 x 坐标（屏幕 → 客户区换算后）。
+    #[serde(default)]
+    pub win_x: Option<i32>,
+    /// 该事件在 `target_hwnd` 客户区内的 y 坐标。
+    #[serde(default)]
+    pub win_y: Option<i32>,
 }
 
 impl InputEvent {
@@ -167,6 +183,18 @@ pub struct Settings {
     pub auto_check_updates: bool,
     /// 点击窗口关闭按钮时最小化到系统托盘而不是退出。
     pub close_to_tray: bool,
+    /// 录制落盘时对鼠标轨迹做 Douglas-Peucker 简化（默认 medium）。
+    /// 旧 settings.json 无此字段时由 `#[serde(default)]` 取 `Medium`。
+    #[serde(default)]
+    pub trajectory_simplify: SimplifyLevel,
+    /// 回放时优先按窗口定位（窗口跟着原窗口走，多屏/分辨率切换不翻车）。
+    /// 关闭后回退到 v2.4 之前的全屏缩放。默认开。
+    #[serde(default = "default_true")]
+    pub use_window_anchor: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -180,6 +208,8 @@ impl Default for Settings {
             record_mouse_move: true,
             auto_check_updates: true,
             close_to_tray: true,
+            trajectory_simplify: SimplifyLevel::Medium,
+            use_window_anchor: true,
         }
     }
 }
@@ -320,12 +350,33 @@ mod tests {
         assert_eq!(s.wait_seconds, 3);
         assert!(s.hide_on_play);
         assert!(s.record_mouse_move);
+        assert_eq!(s.trajectory_simplify, SimplifyLevel::Medium);
 
         let raw: Settings =
             serde_json::from_str(r#"{"resolution_mode":"weird","wait_seconds":999}"#).unwrap();
         let clean = raw.sanitize();
         assert_eq!(clean.resolution_mode, "auto");
         assert_eq!(clean.wait_seconds, 30);
+    }
+
+    #[test]
+    fn trajectory_simplify_is_backward_compatible() {
+        // 旧 settings.json 无该字段：取 SimplifyLevel::default() = Medium
+        let legacy: Settings =
+            serde_json::from_str(r#"{"resolution_mode":"auto"}"#).unwrap();
+        assert_eq!(legacy.trajectory_simplify, SimplifyLevel::Medium);
+
+        // 显式设置后往返保持
+        let mut s = Settings::default();
+        s.trajectory_simplify = SimplifyLevel::High;
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.trajectory_simplify, SimplifyLevel::High);
+
+        // 字符串对齐：UI / 配置层都用 "off"/"low"/"medium"/"high"
+        let json = r#"{"trajectory_simplify":"off"}"#;
+        let parsed: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.trajectory_simplify, SimplifyLevel::Off);
     }
 
     #[test]

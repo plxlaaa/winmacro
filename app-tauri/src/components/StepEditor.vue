@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, nextTick, onMounted, onBeforeUnmount } from "vue";
 import {
   api,
   KIND_LABELS,
@@ -8,6 +8,8 @@ import {
   type Recording,
   type InputEvent,
 } from "../api";
+import Timeline from "./Timeline.vue";
+import { History } from "../lib/undo";
 
 const props = defineProps<{ recording: Recording }>();
 const emit = defineEmits<{ (e: "close"): void; (e: "saved"): void }>();
@@ -19,6 +21,21 @@ const events = ref<InputEvent[]>(
 const original = JSON.stringify(props.recording.events);
 const dirty = computed(() => JSON.stringify(events.value) !== original);
 const saving = ref(false);
+
+// ── 撤销/重做：每次破坏性编辑 push 一次到历史 ──
+const history = new History<InputEvent[]>(events.value, { capacity: 50 });
+const canUndo = ref(false);
+const canRedo = ref(false);
+history.subscribe((cur, info) => {
+  events.value = cur;
+  canUndo.value = info.canUndo;
+  canRedo.value = info.canRedo;
+});
+
+/** 把当前 events 提交进历史。事件密集的输入用 replace 不打断 redo。 */
+function commit() {
+  history.push(events.value);
+}
 
 // ── 视图：默认隐藏 mouse_move（轨迹噪音），只看关键步骤 ──
 const hideMoves = ref(true);
@@ -57,13 +74,16 @@ function setGap(i: number, gap: number) {
   for (let j = i; j < events.value.length; j++) {
     events.value[j].t_ms = Math.max(0, events.value[j].t_ms + delta);
   }
+  commit();
 }
 
 /** 修改鼠标步骤坐标 */
 function setPos(i: number, axis: "x" | "y", val: number) {
   const ev = events.value[i];
   const v = Math.max(0, Math.min(32767, Math.round(val)));
+  if (ev[axis] === v) return;
   ev[axis] = v;
+  commit();
 }
 
 /** 删除选中步骤；剩余步骤保持原绝对时间（等待时长不压缩） */
@@ -74,6 +94,7 @@ function deleteSelected() {
   events.value = events.value.filter((_, i) => !s.has(i));
   selected.value.clear();
   page.value = 0;
+  commit();
 }
 
 /** 裁剪：只保留 [first, last] 闭区间的真实下标，首步时间归零 */
@@ -92,17 +113,88 @@ function trimSelected() {
   events.value = kept;
   selected.value.clear();
   page.value = 0;
+  commit();
 }
 
 function resetDraft() {
   events.value = (JSON.parse(original) as InputEvent[]).map((e) => ({ ...e }));
   selected.value.clear();
   page.value = 0;
+  // 重置也入栈：用户可以从 reset 再 undo 回到改之前
+  commit();
+}
+
+function undo() {
+  const prev = history.undo();
+  if (prev) {
+    selected.value.clear();
+    page.value = 0;
+  }
+}
+function redo() {
+  const next = history.redo();
+  if (next) {
+    selected.value.clear();
+    page.value = 0;
+  }
 }
 
 const durationMs = computed(() =>
   events.value.length ? events.value[events.value.length - 1].t_ms : 0,
 );
+
+// ── 时间轴跳转：二分定位目标事件，滚到对应页 ──
+const stepsWrap = ref<HTMLElement | null>(null);
+function seek(tMs: number) {
+  if (!events.value.length) return;
+  let lo = 0;
+  let hi = events.value.length - 1;
+  let target = events.value.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (events.value[mid].t_ms >= tMs) {
+      target = mid;
+      hi = mid - 1;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  page.value = Math.floor(target / PAGE);
+  // 滚到对应行
+  nextTick(() => {
+    const row = stepsWrap.value?.querySelector<HTMLElement>(
+      `tr[data-idx="${target}"]`,
+    );
+    row?.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+}
+
+function onKeyDown(e: KeyboardEvent) {
+  const mod = e.ctrlKey || e.metaKey;
+  if (!mod) return;
+  // 总是响应：number input 在用户失焦/回车后才 commit，所以 in-input Ctrl+Z
+  // 撤销的是"上一次完整编辑"而不是当前未提交字符；浏览器原生输入字符级
+  // undo 在 input 内仍然可用（我们不 preventDefault 输入字符事件）。
+  if (e.key === "z" || e.key === "Z") {
+    e.preventDefault();
+    if (e.shiftKey) {
+      redo();
+    } else {
+      undo();
+    }
+  } else if (e.key === "y" || e.key === "Y") {
+    e.preventDefault();
+    redo();
+  }
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", onKeyDown);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKeyDown);
+  history.clear();
+});
 
 async function save() {
   if (!events.value.length) {
@@ -154,6 +246,22 @@ function extraText(ev: InputEvent): string {
         </label>
         <span style="color: var(--muted); font-size: 12.5px">隐藏鼠标轨迹</span>
         <span style="flex: 1"></span>
+        <button
+          class="btn sm ghost"
+          :disabled="!canUndo"
+          title="撤销 (Ctrl+Z)"
+          @click="undo"
+        >
+          ↶ 撤销
+        </button>
+        <button
+          class="btn sm ghost"
+          :disabled="!canRedo"
+          title="重做 (Ctrl+Shift+Z / Ctrl+Y)"
+          @click="redo"
+        >
+          ↷ 重做
+        </button>
         <button class="btn sm danger" :disabled="!selCount" @click="deleteSelected">
           删除选中（{{ selCount }}）
         </button>
@@ -168,7 +276,16 @@ function extraText(ev: InputEvent): string {
         </button>
       </div>
 
-      <div class="steps-wrap">
+      <div style="margin-bottom: 10px">
+        <Timeline
+          :events="events"
+          :duration-ms="durationMs"
+          :height="48"
+          @seek="seek"
+        />
+      </div>
+
+      <div class="steps-wrap" ref="stepsWrap">
         <table class="steps editor-table">
           <thead>
             <tr>
@@ -184,6 +301,7 @@ function extraText(ev: InputEvent): string {
             <tr
               v-for="{ ev, i } in shown"
               :key="i"
+              :data-idx="i"
               :class="{ selrow: selected.has(i) }"
             >
               <td><input type="checkbox" :checked="selected.has(i)" @change="toggleSel(i)" /></td>

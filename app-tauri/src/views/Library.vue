@@ -21,6 +21,8 @@ const liveCount = ref(0);
 const countdown = ref<number | null>(null);
 const playLoop = ref<{ done: number; total: number } | null>(null);
 const details = ref<Recording | null>(null);
+const detailsRef = ref<{ setCurrentMs: (ms: number | null) => void } | null>(null);
+const playProgress = ref<{ index: number; total: number } | null>(null);
 const busy = ref(false);
 const screenText = ref("—");
 const unlistens: Array<() => void> = [];
@@ -169,19 +171,37 @@ onMounted(async () => {
     await onEvent("play:done", () => {
       countdown.value = null;
       playLoop.value = null;
+      playProgress.value = null;
+      detailsRef.value?.setCurrentMs(null);
     }),
   );
   unlistens.push(
     await onEvent("play:stopped", () => {
       countdown.value = null;
       playLoop.value = null;
+      playProgress.value = null;
+      detailsRef.value?.setCurrentMs(null);
     }),
   );
   unlistens.push(
     await onEvent("play:error", (p) => {
       countdown.value = null;
       playLoop.value = null;
+      playProgress.value = null;
+      detailsRef.value?.setCurrentMs(null);
       alert(String(p));
+    }),
+  );
+  unlistens.push(
+    await onEvent("play:progress", (p) => {
+      const { index, total } = p as { index: number; total: number };
+      playProgress.value = { index, total };
+      // 详情弹窗开着：把进度推给弹窗画播放头
+      if (details.value && selected.value) {
+        // 通过 events 数组下标 + t_ms 计算当前 ms
+        const ev = selected.value.events[index - 1];
+        if (ev) detailsRef.value?.setCurrentMs(ev.t_ms);
+      }
     }),
   );
 });
@@ -277,6 +297,13 @@ onUnmounted(() => unlistens.forEach((u) => u()));
         <button class="btn danger" v-if="playing" @click="stop">■ 紧急停止（Esc）</button>
         <span v-if="playing" style="color: var(--danger)">脚本回放中，任意时刻按 Esc 立即停止</span>
         <span v-if="playLoop" style="color: var(--accent)">第 {{ playLoop.done }} / {{ playLoop.total }} 轮</span>
+        <span
+          v-if="playProgress"
+          style="color: var(--muted); font-variant-numeric: tabular-nums"
+        >
+          {{ playProgress.index }} / {{ playProgress.total }} 步
+          ({{ Math.round((playProgress.index / playProgress.total) * 100) }}%)
+        </span>
       </template>
     </div>
 
@@ -284,7 +311,12 @@ onUnmounted(() => unlistens.forEach((u) => u()));
       <div class="countdown-num">{{ countdown > 0 ? countdown : "GO" }}</div>
     </div>
 
-    <DetailsDialog v-if="details" :recording="details" @close="details = null" />
+    <DetailsDialog
+      v-if="details"
+      ref="detailsRef"
+      :recording="details"
+      @close="details = null"
+    />
 
     <HotkeyDialog
       v-if="hotkeyTarget"

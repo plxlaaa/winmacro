@@ -1,13 +1,14 @@
 {
   "name": "winmacro-ui",
   "private": true,
-  "version": "2.4.0",
+  "version": "2.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:js": "tsx --test src/lib/*.test.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.1.1",

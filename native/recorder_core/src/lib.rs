@@ -28,6 +28,15 @@ pub struct InputEvent {
     pub dy: Option<i32>,
     pub vk: Option<u16>,
     pub scan: Option<u16>,
+    /// Win32 窗口句柄（v2.5+ 用于回放锚定）。
+    #[serde(default)]
+    pub target_hwnd: Option<u32>,
+    /// 客户区 x。
+    #[serde(default)]
+    pub win_x: Option<i32>,
+    /// 客户区 y。
+    #[serde(default)]
+    pub win_y: Option<i32>,
 }
 
 struct IgnoreRect {
@@ -115,6 +124,31 @@ static ENGINE: Lazy<Engine> = Lazy::new(Engine::new);
 static LAST_JSON: Lazy<Mutex<CString>> =
     Lazy::new(|| Mutex::new(CString::new("[]").unwrap()));
 
+/// Optional playback progress callback, called after each event with
+/// `(index, total)`. Set via `recorder_set_progress_cb`; pass `null` to clear.
+///
+/// Only used by the Tauri backend for the time-axis UI. The Python edition
+/// never sets it, so legacy behavior is unchanged.
+type ProgressCb = unsafe extern "C" fn(index: u32, total: u32);
+static PROGRESS_CB: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+#[no_mangle]
+pub extern "C" fn recorder_set_progress_cb(cb: Option<ProgressCb>) {
+    let ptr = cb
+        .map(|f| f as *const c_void as *mut c_void)
+        .unwrap_or(std::ptr::null_mut());
+    PROGRESS_CB.store(ptr, Ordering::Release);
+}
+
+#[inline]
+fn emit_progress(index: u32, total: u32) {
+    let ptr = PROGRESS_CB.load(Ordering::Acquire);
+    if !ptr.is_null() {
+        let cb: ProgressCb = unsafe { std::mem::transmute(ptr) };
+        unsafe { cb(index, total) };
+    }
+}
+
 /// 紧急停止判定：回放期间、真人（非注入）按下 Esc。
 /// 提取为纯函数以便跨平台单测。VK_ESCAPE = 0x1B。
 pub fn is_emergency_stop(playing: bool, msg: u32, vk: u32, injected: bool) -> bool {
@@ -159,7 +193,7 @@ mod win_impl {
     use super::*;
     use std::thread;
     use std::time::Duration;
-    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -169,16 +203,35 @@ mod win_impl {
         MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, VIRTUAL_KEY,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
-        TranslateMessage, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT,
-        SYSTEM_METRICS_INDEX, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-        WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT,
-        WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+        CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMessageW, GetWindowRect,
+        PostThreadMessageW, ScreenToClient, SetWindowsHookExW, TranslateMessage,
+        UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, SYSTEM_METRICS_INDEX,
+        WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
+        WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN,
+        WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
     };
 
     static MOUSE_HOOK: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
     static KEY_HOOK: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
     static HOOK_THREAD: Mutex<Option<u32>> = Mutex::new(None);
+
+    /// 抓取鼠标事件发生时的"前台窗口 + 客户区坐标"用于回放锚定。
+    /// 失败时（无前台窗口 / 坐标换算失败）三个字段都为 None。
+    /// 注意：调用本函数的开销约 1 µs（两次 Win32 调用），可接受。
+    fn capture_anchor(x: i32, y: i32) -> (Option<u32>, Option<i32>, Option<i32>) {
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd.0.is_null() {
+                return (None, None, None);
+            }
+            let mut pt = POINT { x, y };
+            if ScreenToClient(hwnd, &mut pt).is_ok() {
+                (Some(hwnd.0 as u32), Some(pt.x), Some(pt.y))
+            } else {
+                (Some(hwnd.0 as u32), None, None)
+            }
+        }
+    }
 
     unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if code >= 0 && ENGINE.recording.load(Ordering::SeqCst) {
@@ -190,6 +243,7 @@ mod win_impl {
             let y = info.pt.y;
             let t = ENGINE.elapsed_ms();
             let msg = wparam.0 as u32;
+            let (hwnd, wx, wy) = capture_anchor(x, y);
             let ev = match msg {
                 WM_MOUSEMOVE => Some(InputEvent {
                     kind: "mouse_move".into(),
@@ -202,13 +256,16 @@ mod win_impl {
                     dy: None,
                     vk: None,
                     scan: None,
+                    target_hwnd: hwnd,
+                    win_x: wx,
+                    win_y: wy,
                 }),
-                WM_LBUTTONDOWN => Some(mouse_btn("mouse_down", "left", t, x, y)),
-                WM_LBUTTONUP => Some(mouse_btn("mouse_up", "left", t, x, y)),
-                WM_RBUTTONDOWN => Some(mouse_btn("mouse_down", "right", t, x, y)),
-                WM_RBUTTONUP => Some(mouse_btn("mouse_up", "right", t, x, y)),
-                WM_MBUTTONDOWN => Some(mouse_btn("mouse_down", "middle", t, x, y)),
-                WM_MBUTTONUP => Some(mouse_btn("mouse_up", "middle", t, x, y)),
+                WM_LBUTTONDOWN => Some(mouse_btn("mouse_down", "left", t, x, y, hwnd, wx, wy)),
+                WM_LBUTTONUP => Some(mouse_btn("mouse_up", "left", t, x, y, hwnd, wx, wy)),
+                WM_RBUTTONDOWN => Some(mouse_btn("mouse_down", "right", t, x, y, hwnd, wx, wy)),
+                WM_RBUTTONUP => Some(mouse_btn("mouse_up", "right", t, x, y, hwnd, wx, wy)),
+                WM_MBUTTONDOWN => Some(mouse_btn("mouse_down", "middle", t, x, y, hwnd, wx, wy)),
+                WM_MBUTTONUP => Some(mouse_btn("mouse_up", "middle", t, x, y, hwnd, wx, wy)),
                 WM_MOUSEWHEEL => {
                     let delta = ((info.mouseData >> 16) & 0xffff) as i16 as i32;
                     Some(InputEvent {
@@ -222,6 +279,9 @@ mod win_impl {
                         dy: Some(delta),
                         vk: None,
                         scan: None,
+                        target_hwnd: hwnd,
+                        win_x: wx,
+                        win_y: wy,
                     })
                 }
                 _ => None,
@@ -233,7 +293,16 @@ mod win_impl {
         CallNextHookEx(HHOOK::default(), code, wparam, lparam)
     }
 
-    fn mouse_btn(kind: &str, button: &str, t: u64, x: i32, y: i32) -> InputEvent {
+    fn mouse_btn(
+        kind: &str,
+        button: &str,
+        t: u64,
+        x: i32,
+        y: i32,
+        hwnd: Option<u32>,
+        wx: Option<i32>,
+        wy: Option<i32>,
+    ) -> InputEvent {
         InputEvent {
             kind: kind.into(),
             t_ms: t,
@@ -245,6 +314,9 @@ mod win_impl {
             dy: None,
             vk: None,
             scan: None,
+            target_hwnd: hwnd,
+            win_x: wx,
+            win_y: wy,
         }
     }
 
@@ -441,8 +513,9 @@ mod win_impl {
         if ENGINE.playing.swap(true, Ordering::SeqCst) {
             return -4;
         }
+        let total = events.len() as u32;
         let mut last = 0u64;
-        for ev in events {
+        for (i, ev) in events.iter().enumerate() {
             if !ENGINE.playing.load(Ordering::SeqCst) {
                 break;
             }
@@ -460,6 +533,7 @@ mod win_impl {
                 break;
             }
             last = ev.t_ms;
+            emit_progress((i + 1) as u32, total);
             match ev.kind.as_str() {
                 "mouse_move" => {
                     if let (Some(x), Some(y)) = (ev.x, ev.y) {
@@ -663,5 +737,47 @@ mod tests {
     fn malformed_json_reports_error_not_panic() {
         let parsed: Result<Vec<InputEvent>, _> = serde_json::from_str("not json");
         assert!(parsed.is_err());
+    }
+
+    /// progress callback 接收器：用 `AtomicU32` 收集被回调的最大 index。
+    /// 注意：callback 在另一个线程跑（playback 的循环），需要原子计数。
+    #[test]
+    fn progress_cb_can_be_set_and_cleared() {
+        // 初始为 null
+        recorder_set_progress_cb(None);
+        let ptr0 = PROGRESS_CB.load(Ordering::Acquire);
+        assert!(ptr0.is_null(), "initial progress cb must be null");
+
+        // 设一个测试回调：每调用一次把全局计数器 +1
+        static CALL_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        CALL_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+        unsafe extern "C" fn cb(_index: u32, _total: u32) {
+            CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        recorder_set_progress_cb(Some(cb));
+        let ptr1 = PROGRESS_CB.load(Ordering::Acquire);
+        assert!(!ptr1.is_null(), "after set, progress cb must be non-null");
+
+        // 直接通过 emit_progress 触发（playback 在非 Windows 编译单元里不可用）
+        emit_progress(1, 10);
+        emit_progress(2, 10);
+        assert_eq!(
+            CALL_COUNT.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "cb should have been called twice"
+        );
+
+        // 清掉
+        recorder_set_progress_cb(None);
+        let ptr2 = PROGRESS_CB.load(Ordering::Acquire);
+        assert!(ptr2.is_null(), "after clear, progress cb must be null again");
+
+        // 清掉后 emit_progress 应当是 no-op
+        emit_progress(3, 10);
+        assert_eq!(
+            CALL_COUNT.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "cb should not have been called after clear"
+        );
     }
 }
