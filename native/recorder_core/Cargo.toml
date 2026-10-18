@@ -21,5 +21,8 @@ windows = { version = "0.58", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_Threading",
     "Win32_System_LibraryLoader",
+    # 父 + 子 feature 都得开：父 `Win32_Graphics` 启用 `pub mod Graphics;`，
+    # 子 `Win32_Graphics_Gdi` 启用 `pub mod Gdi;`（含 ScreenToClient）。
+    "Win32_Graphics",
     "Win32_Graphics_Gdi",
 ] }
