@@ -22,8 +22,9 @@
 ## 功能
 
 - `F10` 全局快捷键开始 / 结束录制，以整个屏幕为范围记录键盘、鼠标操作（热键本身不会录进脚本）
-- 录制库管理：详情逐步查看（类型 / 时间 / 坐标 / 按键）、重命名、删除、导出 / 导入 JSON
-- 回放支持倍速（立即 / 0.5× / 1× / 2× / 5×）、循环次数、执行前倒计时
+- 录制库管理：按名称或热键搜索、复制脚本、详情逐步查看（类型 / 时间 / 坐标 / 按键）、重命名、删除、导出 / 导入 JSON
+- 步骤编辑支持坐标和间隔调整、裁剪、撤销 / 重做；复制的脚本使用独立 ID，并清除热键以避免冲突
+- 回放支持倍速（立即 / 0.5× / 1× / 2× / 5×）、循环次数、执行前倒计时；倒计时可通过按钮或 `F11` 取消
 - **新设置项**：执行前等待秒数、回放时自动隐藏主界面、是否记录鼠标轨迹（关闭后只录点击 / 滚轮 / 键盘）
 - 设置中可自动识别或手动指定录制分辨率，回放时映射到当前屏幕
 
@@ -79,7 +80,7 @@ scripts\build_native.bat
 
 ## 构建安装器（CI 自动完成）
 
-推送 `v*` 标签触发 **Tauri Release** 工作流：Windows runner 上跑 logic/core 单测 → `tauri build` → NSIS 中文安装器 → 附到 GitHub Release。
+推送 `v*` 标签触发 **Tauri Release** 工作流：Windows runner 上跑前端与 logic/core 单测 → `tauri build` → 签名的 NSIS 中文安装器 → 附到 GitHub Release 草稿。核对构建结果和更新文件后再正式发布。
 
 ## 结构
 
@@ -103,4 +104,4 @@ cd native\recorder_core
 cargo test
 ```
 
-推送到 GitHub 后，`.github/workflows/ci.yml` 会自动运行上述测试，并在 Windows 上执行 `cargo check` 验证原生核心。
+推送到 GitHub 后，`.github/workflows/ci.yml` 会自动运行 Python、前端、Rust 核心与领域测试，以及前端生产构建；Windows runner 上执行 `cargo check` 验证原生核心和完整 Tauri 后端。

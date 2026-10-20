@@ -6,6 +6,23 @@ on:
   pull_request:
 
 jobs:
+  frontend:
+    name: Frontend tests and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app-tauri/package-lock.json
+      - run: npm ci
+      - run: npm run test:js
+      - run: npm run build
+
   python-tests:
     name: Python tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -31,6 +48,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Run tests
         run: cargo test --manifest-path native/recorder_core/Cargo.toml --verbose
+      - name: Run domain tests
+        run: cargo test --manifest-path app-tauri/logic/Cargo.toml --locked
 
   rust-check-windows:
     name: Rust core check (windows-latest)
@@ -40,3 +59,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo check
         run: cargo check --manifest-path native/recorder_core/Cargo.toml --all-targets
+      - name: Check Tauri backend
+        run: cargo check --manifest-path app-tauri/src-tauri/Cargo.toml --locked --all-targets

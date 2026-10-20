@@ -9,10 +9,13 @@ import {
 import DetailsDialog from "../components/DetailsDialog.vue";
 import HotkeyDialog from "../components/HotkeyDialog.vue";
 import StepEditor from "../components/StepEditor.vue";
+import { filterRecordings } from "../lib/library";
 
 const props = defineProps<{ recording: boolean; playing: boolean }>();
 
 const recordings = ref<Recording[]>([]);
+const search = ref("");
+const filteredRecordings = computed(() => filterRecordings(recordings.value, search.value));
 const selectedId = ref<string | null>(null);
 const speed = ref(1);
 const repeat = ref(1);
@@ -69,11 +72,14 @@ async function toggleRecord() {
 }
 
 async function play() {
-  if (!selected.value || props.playing || props.recording) return;
+  if (!selected.value || props.playing || props.recording || busy.value) return;
+  busy.value = true;
   try {
     await api.startPlayback(selected.value.id, speed.value, repeat.value, waitSeconds.value);
   } catch (e) {
     alert(String(e));
+  } finally {
+    busy.value = false;
   }
 }
 
@@ -93,6 +99,21 @@ async function rename(rec: Recording) {
   if (!name || !name.trim()) return;
   await api.renameRecording(rec.id, name.trim());
   await load();
+}
+
+async function duplicate(rec: Recording) {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    const copy = await api.duplicateRecording(rec.id);
+    search.value = "";
+    await load();
+    selectedId.value = copy.id;
+  } catch (e) {
+    alert(String(e));
+  } finally {
+    busy.value = false;
+  }
 }
 
 const hotkeyTarget = ref<Recording | null>(null);
@@ -157,9 +178,8 @@ onMounted(async () => {
     }),
   );
   unlistens.push(
-    await onEvent("play:countdown", (p) => {
-      const v = p as { seconds: number };
-      countdown.value = v.seconds;
+    await onEvent<number>("play:countdown", (seconds) => {
+      countdown.value = seconds > 0 ? seconds : null;
     }),
   );
   unlistens.push(
@@ -235,13 +255,20 @@ onUnmounted(() => unlistens.forEach((u) => u()));
       </div>
     </div>
 
+    <div class="library-toolbar">
+      <input v-model="search" type="search" aria-label="搜索脚本名称或热键" placeholder="搜索脚本名称或热键…" />
+      <span aria-live="polite">{{ filteredRecordings.length }} / {{ recordings.length }} 个脚本</span>
+      <button v-if="search" class="btn sm ghost" @click="search = ''">清空搜索</button>
+      <button class="btn sm" @click="importJson">导入脚本</button>
+    </div>
+
     <div class="rec-grid">
       <div v-if="!recordings.length" class="empty">
         <div class="big">🎬</div>
         还没有录制。<br />按 <span class="hint-kbd">F10</span> 开始第一次录制。
       </div>
       <div
-        v-for="rec in recordings"
+        v-for="rec in filteredRecordings"
         :key="rec.id"
         class="rec-card"
         :class="{ selected: rec.id === selectedId }"
@@ -267,14 +294,18 @@ onUnmounted(() => unlistens.forEach((u) => u()));
           <button class="btn sm" @click="editTarget = rec">✏️ 编辑</button>
           <button class="btn sm ghost" @click="hotkeyTarget = rec">⚡ 热键</button>
           <button class="btn sm ghost" @click="rename(rec)">重命名</button>
+          <button class="btn sm ghost" :disabled="busy" @click="duplicate(rec)">复制</button>
           <button class="btn sm ghost" @click="exportJson(rec)">导出</button>
           <button class="btn sm danger" @click="remove(rec)">删除</button>
         </div>
       </div>
+      <div v-if="recordings.length && !filteredRecordings.length" class="empty">
+        没有匹配的脚本，试试其他名称或热键。
+      </div>
     </div>
 
     <div class="status-bar">
-      <button class="btn rec-btn" :disabled="playing" @click="toggleRecord">
+      <button class="btn rec-btn" :disabled="playing || busy" @click="toggleRecord">
         {{ recording ? "■ 结束录制（F10）" : "● 开始录制（F10）" }}
       </button>
       <template v-if="recording">
@@ -282,16 +313,17 @@ onUnmounted(() => unlistens.forEach((u) => u()));
         <span style="color: var(--muted)">正在记录… 已捕获 {{ liveCount.toLocaleString() }} 个事件</span>
       </template>
       <template v-else>
+        <span v-if="selected" class="play-target" :title="selected.name">选中：{{ selected.name }}</span>
         <span style="color: var(--muted)">执行参数</span>
         <select v-model.number="speed">
           <option v-for="o in SPEED_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
         </select>
         <span style="color: var(--muted)">循环</span>
-        <input v-model.number="repeat" type="number" min="1" max="999" style="min-width: 64px" />
+        <input v-model.number="repeat" :disabled="playing" type="number" min="1" max="999" style="min-width: 64px" />
         <span style="color: var(--muted)">等待</span>
-        <input v-model.number="waitSeconds" type="number" min="0" max="60" style="min-width: 64px" />
+        <input v-model.number="waitSeconds" :disabled="playing" type="number" min="0" max="30" style="min-width: 64px" />
         <span style="color: var(--muted)">秒</span>
-        <button class="btn primary" :disabled="!selected || playing" @click="play">
+        <button class="btn primary" :disabled="!selected || playing || busy" @click="play">
           ▶ 执行选中
         </button>
         <button class="btn danger" v-if="playing" @click="stop">■ 紧急停止（Esc）</button>
@@ -309,6 +341,7 @@ onUnmounted(() => unlistens.forEach((u) => u()));
 
     <div v-if="countdown !== null" class="countdown-mask">
       <div class="countdown-num">{{ countdown > 0 ? countdown : "GO" }}</div>
+      <button class="btn danger" @click="stop">取消执行（F11）</button>
     </div>
 
     <DetailsDialog
@@ -337,3 +370,33 @@ onUnmounted(() => unlistens.forEach((u) => u()));
     />
   </div>
 </template>
+
+<style scoped>
+.library-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 20px 0 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.library-toolbar input {
+  flex: 1;
+  min-width: 180px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  color-scheme: dark;
+}
+.library-toolbar input::placeholder { color: var(--muted); }
+.library-toolbar input:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rec-card { flex-wrap: wrap; }
+.rec-main { min-width: 180px; }
+.rec-actions { flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
+.play-target { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.countdown-mask { display: flex; flex-direction: column; justify-content: center; gap: 24px; }
+</style>

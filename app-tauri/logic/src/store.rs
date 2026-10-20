@@ -108,12 +108,13 @@ fn load_recordings_at(dir: &std::path::Path) -> Vec<Recording> {
     };
     let records: Vec<Recording> = serde_json::from_value(items).unwrap_or_default();
 
-    // 3. 自动迁移：把 JSON 改名为 .bak，并把数据写进 BIN
+    // 3. BIN 写入成功后才归档 JSON；磁盘满或权限不足时保留原始数据。
     if !records.is_empty() {
         if let Ok(bytes) = encode_bincode(&records) {
-            let _ = atomic_write_bytes(&bin_path, &bytes);
+            if atomic_write_bytes(&bin_path, &bytes).is_ok() {
+                let _ = fs::rename(&json_path, json_path.with_extension("json.bak"));
+            }
         }
-        let _ = fs::rename(&json_path, json_path.with_extension("json.bak"));
     }
     records
 }
@@ -316,6 +317,26 @@ mod tests {
             let loaded2 = load_recordings_at(dir);
             assert_eq!(loaded2.len(), 1);
             assert_eq!(loaded2[0].events.len(), 3);
+        });
+    }
+
+    #[test]
+    fn failed_migration_preserves_json_for_next_start() {
+        with_tmp("migration-failed", |dir| {
+            let json = serde_json::to_string(&vec![fake_recording("recoverable")]).unwrap();
+            fs::write(dir.join("recordings.json"), &json).unwrap();
+            // A directory at the staging path deterministically prevents writing.
+            fs::create_dir(dir.join("recordings.tmp")).unwrap();
+            for _ in 0..2 {
+                let loaded = load_recordings_at(dir);
+                assert_eq!(loaded[0].id, "test-recoverable");
+                assert_eq!(fs::read_to_string(dir.join("recordings.json")).unwrap(), json);
+                assert!(!dir.join("recordings.json.bak").exists());
+            }
+            fs::remove_dir(dir.join("recordings.tmp")).unwrap();
+            assert_eq!(load_recordings_at(dir).len(), 1);
+            assert!(dir.join("recordings.bin").exists());
+            assert!(dir.join("recordings.json.bak").exists());
         });
     }
 

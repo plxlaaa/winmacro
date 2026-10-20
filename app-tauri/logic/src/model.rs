@@ -136,6 +136,16 @@ impl Recording {
         }
     }
 
+    /// 复制脚本作为独立草稿，不继承全局热键。
+    pub fn duplicate(&self) -> Self {
+        let mut copy = self.clone();
+        copy.id = new_id();
+        copy.name = format!("{}（副本）", self.name);
+        copy.created_at = iso_now();
+        copy.hotkey = None;
+        copy
+    }
+
     /// 依据最后一个事件重算总时长（编辑步骤后调用）。
     pub fn recompute_duration(&mut self) {
         self.duration_ms = self.events.last().map(|e| e.t_ms).unwrap_or(0);
@@ -280,6 +290,30 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_has_independent_events_and_no_hotkey() {
+        let source = Recording {
+            id: "source".into(), name: "报表".into(),
+            hotkey: Some("Control+Alt+1".into()),
+            duration_ms: 123,
+            screen_width: 1920, screen_height: 1080,
+            events: vec![InputEvent { t_ms: 123, x: Some(10), target_hwnd: Some(7), win_x: Some(5), ..Default::default() }],
+            ..Default::default()
+        };
+        let mut copy = source.duplicate();
+        assert_ne!(copy.id, source.id);
+        assert_eq!(copy.name, "报表（副本）");
+        assert!(!copy.created_at.is_empty());
+        assert_eq!(copy.hotkey, None);
+        assert_eq!(copy.duration_ms, source.duration_ms);
+        assert_eq!(copy.screen_width, 1920);
+        assert_eq!(copy.events[0].target_hwnd, Some(7));
+        assert_eq!(copy.events[0].win_x, Some(5));
+        copy.events[0].x = Some(99);
+        assert_eq!(source.events[0].x, Some(10));
+        assert_eq!(source.hotkey.as_deref(), Some("Control+Alt+1"));
+    }
 
     #[test]
     fn parses_legacy_python_event_json_with_missing_keys() {

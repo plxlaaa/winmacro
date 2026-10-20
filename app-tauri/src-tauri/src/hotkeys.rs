@@ -6,7 +6,7 @@
 //! normalize 过的规范串（`Shortcut::to_string()` 输出）。
 
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use crate::engine::{self, AppState};
 
@@ -31,14 +31,19 @@ pub fn rebind_all(app: &AppHandle) -> Result<(), String> {
     let f10: Shortcut = "F10"
         .parse()
         .map_err(|e| format!("注册 F10 失败：{e}"))?;
-    gs.on_shortcut(f10, |app, _, _| engine::toggle_recording(app))
+    gs.on_shortcut(f10, |app, _, event| {
+        if event.state == ShortcutState::Pressed {
+            engine::toggle_recording(app);
+        }
+    })
         .map_err(|e| format!("注册 F10 失败：{e}"))?;
 
     // F11：停止回放
     let f11: Shortcut = "F11"
         .parse()
         .map_err(|e| format!("注册 F11 失败：{e}"))?;
-    gs.on_shortcut(f11, |app, _, _| {
+    gs.on_shortcut(f11, |app, _, event| {
+        if event.state != ShortcutState::Pressed { return; }
         engine::stop_playback(app);
         let _ = app.emit("play:stopped", ());
     })
@@ -66,7 +71,8 @@ pub fn rebind_all(app: &AppHandle) -> Result<(), String> {
         }
         let rec_id = rec.id.clone();
         // 重复绑定时后注册者报错 → 跳过（数据层已防重，这是兜底）
-        let _ = gs.on_shortcut(s, move |app, _, _| {
+        let _ = gs.on_shortcut(s, move |app, _, event| {
+            if event.state != ShortcutState::Pressed { return; }
             let state = app.state::<AppState>();
             let rec = state
                 .recordings

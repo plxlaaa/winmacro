@@ -38,6 +38,20 @@ fn delete_recording(state: State<'_, AppState>, id: String) -> Result<(), String
 }
 
 #[tauri::command]
+fn duplicate_recording(state: State<'_, AppState>, id: String) -> Result<Recording, String> {
+    let mut list = state.recordings.lock().unwrap();
+    let source = list.iter().find(|r| r.id == id)
+        .ok_or_else(|| "找不到该录制".to_string())?;
+    let copy = store::ensure_unique_id(source.duplicate(), &list);
+    // 先持久化，写入失败时保留内存中的原始脚本库。
+    let mut updated = list.clone();
+    updated.insert(0, copy.clone());
+    store::save_recordings(&updated)?;
+    *list = updated;
+    Ok(copy)
+}
+
+#[tauri::command]
 fn rename_recording(state: State<'_, AppState>, id: String, name: String) -> Result<(), String> {
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -93,7 +107,7 @@ fn start_playback(
         .cloned()
         .ok_or_else(|| "找不到该录制".to_string())?;
     let wait = wait_seconds.unwrap_or_else(|| state.settings.lock().unwrap().wait_seconds);
-    play_recording(app, rec, speed, repeat.max(1), wait)
+    play_recording(app, rec, speed, repeat, wait)
 }
 
 #[tauri::command]
@@ -250,6 +264,7 @@ fn main() {
             get_settings,
             set_settings,
             delete_recording,
+            duplicate_recording,
             rename_recording,
             is_recording,
             is_playing,

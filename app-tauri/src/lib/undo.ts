@@ -17,22 +17,26 @@
  * - ring buffer 满后丢最早的
  * - 提供 `subscribe` 让 Vue 直接 `watchEffect` 同步
  *
- * 复杂度：snapshot 是浅 clone（数组 + 元素对象），按需换 immutable 结构。
+ * 快照读写均深拷贝，避免编辑 Vue 响应式草稿时污染历史。
  */
 
 export interface HistoryOptions {
   /** 最大历史深度（默认 50，0 = 无限） */
   capacity?: number;
-  /** 自定义浅拷贝（默认对 T 调用 spread） */
+  /** 自定义快照拷贝；必须返回与输入独立的值。 */
   clone?: <T>(v: T) => T;
 }
 
 export type Listener<T> = (state: T, info: { canUndo: boolean; canRedo: boolean }) => void;
 
 const defaultClone = <T>(v: T): T => {
-  // 数组 / 对象的浅拷贝足够常见需求
-  if (Array.isArray(v)) return [...v] as unknown as T;
-  if (v && typeof v === "object") return { ...v };
+  // 递归访问也支持 Vue Proxy；structuredClone 无法克隆响应式代理。
+  if (Array.isArray(v)) return v.map((item) => defaultClone(item)) as T;
+  if (v && typeof v === "object") {
+    return Object.fromEntries(
+      Object.entries(v).map(([key, value]) => [key, defaultClone(value)]),
+    ) as T;
+  }
   return v;
 };
 
@@ -54,7 +58,7 @@ export class History<T> {
 
   /** 当前状态（未初始化时返回 undefined） */
   current(): T | undefined {
-    return this.index >= 0 ? this.stack[this.index] : undefined;
+    return this.index >= 0 ? this.clone(this.stack[this.index]) : undefined;
   }
 
   canUndo(): boolean {
@@ -143,9 +147,9 @@ export class History<T> {
 
   private notify(): void {
     if (this.listeners.size === 0) return;
-    const cur = this.current();
+    const cur = this.index >= 0 ? this.stack[this.index] : undefined;
     if (cur === undefined) return;
     const info = { canUndo: this.canUndo(), canRedo: this.canRedo() };
-    for (const fn of this.listeners) fn(cur, info);
+    for (const fn of this.listeners) fn(this.clone(cur), { ...info });
   }
 }

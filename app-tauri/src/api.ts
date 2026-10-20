@@ -12,6 +12,9 @@ export interface InputEvent {
   dy?: number | null;
   vk?: number | null;
   scan?: number | null;
+  target_hwnd?: number | null;
+  win_x?: number | null;
+  win_y?: number | null;
 }
 
 export interface Recording {
@@ -67,6 +70,7 @@ export const api = {
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (s: Settings) => invoke<void>("set_settings", { settings: s }),
   deleteRecording: (id: string) => invoke<void>("delete_recording", { id }),
+  duplicateRecording: (id: string) => invoke<Recording>("duplicate_recording", { id }),
   renameRecording: (id: string, name: string) =>
     invoke<void>("rename_recording", { id, name }),
   setHotkey: (id: string, hotkey: string | null) =>
@@ -96,6 +100,6 @@ export const api = {
   screenSize: () => invoke<[number, number]>("screen_size"),
 };
 
-export function onEvent(name: string, handler: (payload: unknown) => void): Promise<UnlistenFn> {
-  return listen(name, (e) => handler(e.payload));
+export function onEvent<T = unknown>(name: string, handler: (payload: T) => void): Promise<UnlistenFn> {
+  return listen<T>(name, (e) => handler(e.payload));
 }

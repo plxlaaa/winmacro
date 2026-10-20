@@ -18,6 +18,8 @@ use winmacro_logic::transform::{apply_speed, remap_events, remap_to_anchor, Wind
 pub const HOTKEY_RECORD_VK: u32 = 0x79;
 
 pub struct AppState {
+    /// Serialize session transitions; playback remains busy until its worker exits.
+    pub session_lock: Mutex<()>,
     pub settings: Mutex<Settings>,
     pub recordings: Mutex<Vec<Recording>>,
     pub playing: AtomicBool,
@@ -30,6 +32,7 @@ pub struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self {
+            session_lock: Mutex::new(()),
             settings: Mutex::new(store::load_settings()),
             recordings: Mutex::new(store::load_recordings()),
             playing: AtomicBool::new(false),
@@ -53,6 +56,11 @@ fn hide_main(app: &AppHandle) {
 }
 
 pub fn start_recording(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let _session = state.session_lock.lock().unwrap();
+    if state.playing.load(Ordering::SeqCst) {
+        return Err("正在回放，请先停止".into());
+    }
     if recorder_core::recorder_is_recording() != 0 {
         return Ok(());
     }
@@ -75,6 +83,11 @@ pub fn start_recording(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn stop_recording(app: &AppHandle) -> Result<Recording, String> {
+    let state = app.state::<AppState>();
+    let _session = state.session_lock.lock().unwrap();
+    if recorder_core::recorder_is_recording() == 0 {
+        return Err("当前没有正在进行的录制".into());
+    }
     let ptr = recorder_core::recorder_stop();
     if ptr.is_null() {
         return Err("录制核心未返回数据".to_string());
@@ -85,7 +98,6 @@ pub fn stop_recording(app: &AppHandle) -> Result<Recording, String> {
     let events: Vec<winmacro_logic::model::InputEvent> =
         serde_json::from_str(&raw).map_err(|e| format!("解析录制数据失败：{e}"))?;
 
-    let state = app.state::<AppState>();
     let (keep_moves, canvas_w, canvas_h, mode, simplify_level) = {
         let s = state.settings.lock().unwrap().clone();
         let (w, h) = if s.resolution_mode == "manual" {
@@ -133,12 +145,19 @@ pub fn play_recording(
     repeat: u32,
     wait_seconds: u32,
 ) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let session = state.session_lock.lock().unwrap();
+    if !speed.is_finite() || speed < 0.0 {
+        return Err("播放速度必须是非负有限数值".into());
+    }
+    if repeat == 0 || repeat > 999 || wait_seconds > 30 {
+        return Err("循环次数须为 1～999，等待须为 0～30 秒".into());
+    }
     if recorder_core::recorder_is_recording() != 0 {
         return Err("正在录制，无法回放".to_string());
     }
-    let state = app.state::<AppState>();
     if state.playing.load(Ordering::SeqCst) {
-        stop_playback(&app);
+        return Err("正在回放或停止中，请稍后再试".into());
     }
     let hide = state.settings.lock().unwrap().hide_on_play;
     // 注意：`state` 借用了 `app`，而下面的 `move` closure 需要 `'static`，
@@ -146,7 +165,6 @@ pub fn play_recording(
     let use_anchor = state.settings.lock().unwrap().use_window_anchor;
     let token = state.play_token.fetch_add(1, Ordering::SeqCst) + 1;
     state.playing.store(true, Ordering::SeqCst);
-    drop(state);
 
     if hide {
         hide_main(&app);
@@ -155,9 +173,13 @@ pub fn play_recording(
 
     // 装上 progress 回调（幂等）。每次播放前装一次即可。
     install_progress_callback(&app);
+    drop(session);
+    drop(state);
 
     thread::spawn(move || {
         let finish = |app: &AppHandle, aborted: bool| {
+            let state = app.state::<AppState>();
+            let _session = state.session_lock.lock().unwrap();
             recorder_core::recorder_set_progress_cb(None);
             app.state::<AppState>()
                 .playing
@@ -167,12 +189,17 @@ pub fn play_recording(
         };
         // countdown phase
         for s in (1..=wait_seconds).rev() {
+            if !still_current(&app, token) {
+                finish(&app, true);
+                return;
+            }
             let _ = app.emit("play:countdown", s);
             if !sleep_interruptible(Duration::from_secs(1), &app, token) {
                 finish(&app, true);
                 return;
             }
         }
+        let _ = app.emit("play:countdown", 0u32);
         // remap to the current screen (or to the original window's current position),
         // then apply speed
         let (cw, ch) = recorder_core::primary_screen_size();
@@ -216,9 +243,13 @@ pub fn play_recording(
                 finish(&app, true);
                 return;
             }
-            let code = recorder_core::recorder_play(cstr.as_ptr());
+            let code = recorder_core::play_json_until(&cstr, || !still_current(&app, token));
             if code < 0 {
                 let _ = app.emit("play:error", format!("回放失败（错误码 {code}）"));
+                finish(&app, true);
+                return;
+            }
+            if code == recorder_core::PLAYBACK_ABORTED || !still_current(&app, token) {
                 finish(&app, true);
                 return;
             }
@@ -230,12 +261,13 @@ pub fn play_recording(
 }
 
 pub fn stop_playback(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let _session = state.session_lock.lock().unwrap();
+    state.play_token.fetch_add(1, Ordering::SeqCst);
     recorder_core::recorder_abort_playback();
     // 清掉 progress 回调，避免播放停止后还有残留
     recorder_core::recorder_set_progress_cb(None);
-    let state = app.state::<AppState>();
-    state.play_token.fetch_add(1, Ordering::SeqCst);
-    state.playing.store(false, Ordering::SeqCst);
+    // The worker owns the busy flag until input release and completion finish.
 }
 
 /// progress 回调用的全局 AppHandle 槽位。第一次播放前由
@@ -283,20 +315,23 @@ fn still_current(app: &AppHandle, token: u64) -> bool {
 }
 
 /// 把 Win32 HWND 解析成当前屏幕位置 + 客户区大小。
-/// Windows：调 `GetWindowRect`。窗口不存在 / 已销毁 → 返回 None。
+/// Windows：将客户区原点转为屏幕坐标，与录制时的 ScreenToClient 对称。
 /// 非 Windows：永远 None（logic crate 自动回退到全屏缩放）。
 #[cfg(windows)]
 fn lookup_window_bounds(hwnd: u32) -> Option<WindowBounds> {
     use recorder_core::WinOk;
-    use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::Foundation::{HWND, POINT, RECT};
     unsafe {
         let h = HWND(hwnd as *mut std::ffi::c_void);
         let mut rect = RECT::default();
+        let mut origin = POINT::default();
         // 0.58 返回 BOOL、0.59+ 返回 Result，用 .win_ok() 兼容两者
-        if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(h, &mut rect).win_ok() {
+        if windows::Win32::UI::WindowsAndMessaging::GetClientRect(h, &mut rect).win_ok()
+            && windows::Win32::Graphics::Gdi::ClientToScreen(h, &mut origin).win_ok()
+        {
             Some(WindowBounds {
-                x: rect.left,
-                y: rect.top,
+                x: origin.x,
+                y: origin.y,
                 w: rect.right - rect.left,
                 h: rect.bottom - rect.top,
             })

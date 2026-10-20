@@ -6,6 +6,39 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { History } from "./undo";
+import { reactive } from "vue";
+
+test("editing nested reactive events cannot mutate earlier snapshots", () => {
+  const events = reactive([{ t_ms: 10, position: { x: 1 } }]);
+  const h = new History(events);
+  events[0].t_ms = 20;
+  events[0].position.x = 2;
+  h.push(events);
+  assert.deepEqual(h.undo(), [{ t_ms: 10, position: { x: 1 } }]);
+  assert.deepEqual(h.redo(), [{ t_ms: 20, position: { x: 2 } }]);
+});
+
+test("editing after undo creates an independent branch", () => {
+  const h = new History([{ x: 1 }]);
+  h.push([{ x: 2 }]);
+  const draft = h.undo()!;
+  draft[0].x = 3;
+  assert.deepEqual(h.current(), [{ x: 1 }]);
+  h.push(draft);
+  assert.equal(h.canRedo(), false);
+  assert.deepEqual(h.undo(), [{ x: 1 }]);
+});
+
+test("readers and subscribers receive isolated copies", () => {
+  const h = new History([{ x: 1 }]);
+  let seen = 0;
+  h.subscribe((draft) => { draft[0].x = 999; });
+  h.subscribe((draft) => { seen = draft[0].x; });
+  h.push([{ x: 2 }]);
+  h.current()![0].x = 888;
+  assert.equal(seen, 2);
+  assert.deepEqual(h.current(), [{ x: 2 }]);
+});
 
 test("initial state with no value", () => {
   const h = new History<number[]>();
@@ -148,7 +181,7 @@ test("subscriber can be unsubscribed mid-flight", () => {
   assert.equal(count, 2);
 });
 
-test("default clone shallow-copies arrays (so external mutations don't leak)", () => {
+test("external array mutations do not leak into history", () => {
   const original = [{ id: 1 }, { id: 2 }];
   const h = new History(original);
   // mutate the externally-held array

@@ -10,6 +10,7 @@ import {
 } from "../api";
 import Timeline from "./Timeline.vue";
 import { History } from "../lib/undo";
+import { setEventPosition } from "../lib/editor";
 
 const props = defineProps<{ recording: Recording }>();
 const emit = defineEmits<{ (e: "close"): void; (e: "saved"): void }>();
@@ -68,6 +69,7 @@ function gapOf(i: number): number {
 
 /** 修改第 i 步的间隔：该步及后续整体平移，保持后续节奏 */
 function setGap(i: number, gap: number) {
+  if (!Number.isFinite(gap)) return;
   const g = Math.max(0, Math.min(600000, Math.round(gap)));
   const delta = g - gapOf(i);
   if (delta === 0) return;
@@ -79,11 +81,7 @@ function setGap(i: number, gap: number) {
 
 /** 修改鼠标步骤坐标 */
 function setPos(i: number, axis: "x" | "y", val: number) {
-  const ev = events.value[i];
-  const v = Math.max(0, Math.min(32767, Math.round(val)));
-  if (ev[axis] === v) return;
-  ev[axis] = v;
-  commit();
+  if (setEventPosition(events.value[i], axis, val)) commit();
 }
 
 /** 删除选中步骤；剩余步骤保持原绝对时间（等待时长不压缩） */

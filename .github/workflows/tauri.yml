@@ -24,7 +24,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
+        working-directory: app-tauri
+
+      - name: Frontend tests
+        run: npm run test:js
         working-directory: app-tauri
 
       - name: Rust unit tests (logic + core)
@@ -42,5 +46,5 @@ jobs:
           tagName: v__VERSION__
           releaseName: "WinMacro v__VERSION__"
           releaseBody: "一键安装版（NSIS 安装器，支持自定义安装路径，卸载请运行安装目录内的 Uninstall.exe）。"
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false

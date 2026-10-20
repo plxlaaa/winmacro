@@ -24,7 +24,7 @@ onMounted(async () => {
   });
   await onEvent("play:started", () => (playing.value = true));
   await onEvent("play:done", () => (playing.value = false));
-  await onEvent("play:stopped", () => (playing.value = false));
+  await onEvent("play:stopped", refreshFlags);
 
   // 启动 3 秒后按设置静默检查更新
   try {

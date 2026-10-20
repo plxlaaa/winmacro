@@ -199,6 +199,74 @@ pub fn is_emergency_stop(playing: bool, msg: u32, vk: u32, injected: bool) -> bo
     playing && !injected && vk == VK_ESCAPE && (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
 }
 
+/// Non-error completion code: a human or the host cancelled playback.
+pub const PLAYBACK_ABORTED: i32 = 1;
+
+/// Schedule against elapsed time so long pauses are preserved without drift.
+/// Input injection is supplied by the caller, keeping timing tests harmless.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn run_timeline(
+    events: &[InputEvent],
+    cancelled: impl FnMut() -> bool,
+    send: impl FnMut(&InputEvent),
+    progress: impl FnMut(u32, u32),
+) -> i32 {
+    let start = Instant::now();
+    run_timeline_clocked(events, cancelled, send, progress,
+        || start.elapsed().as_millis() as u64,
+        |ms| std::thread::sleep(std::time::Duration::from_millis(ms)))
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn run_timeline_clocked(
+    events: &[InputEvent],
+    mut cancelled: impl FnMut() -> bool,
+    mut send: impl FnMut(&InputEvent),
+    mut progress: impl FnMut(u32, u32),
+    mut elapsed_ms: impl FnMut() -> u64,
+    mut sleep_ms: impl FnMut(u64),
+) -> i32 {
+    for (index, event) in events.iter().enumerate() {
+        loop {
+            if cancelled() { return PLAYBACK_ABORTED; }
+            let remaining = event.t_ms.saturating_sub(elapsed_ms());
+            if remaining == 0 { break; }
+            sleep_ms(remaining.min(50));
+        }
+        send(event);
+        progress((index + 1) as u32, events.len() as u32);
+    }
+    if cancelled() { PLAYBACK_ABORTED } else { 0 }
+}
+
+/// Track only inputs pressed by this script so cancellation cannot leave a drag
+/// or modifier held. Repeated key-downs still require just one key-up.
+#[derive(Default)]
+#[cfg_attr(not(windows), allow(dead_code))]
+struct HeldInputs {
+    keys: std::collections::BTreeMap<u16, InputEvent>,
+    buttons: std::collections::BTreeMap<String, InputEvent>,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl HeldInputs {
+    fn track(&mut self, event: &InputEvent) {
+        match event.kind.as_str() {
+            "key_down" => { if let Some(vk) = event.vk { self.keys.insert(vk, event.clone()); } }
+            "key_up" => { if let Some(vk) = event.vk { self.keys.remove(&vk); } }
+            "mouse_down" => { self.buttons.insert(event.button.clone().unwrap_or_else(|| "left".into()), event.clone()); }
+            "mouse_up" => { self.buttons.remove(event.button.as_deref().unwrap_or("left")); }
+            _ => {}
+        }
+    }
+
+    fn releases(self) -> Vec<InputEvent> {
+        self.keys.into_values().map(|mut event| { event.kind = "key_up".into(); event })
+            .chain(self.buttons.into_values().map(|mut event| { event.kind = "mouse_up".into(); event }))
+            .collect()
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn recorder_set_ignore_rect(x: c_int, y: c_int, w: c_int, h: c_int) {
     let mut r = ENGINE.ignore.lock().unwrap();
@@ -245,7 +313,7 @@ mod win_impl {
         MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, VIRTUAL_KEY,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMessageW, PostThreadMessageW,
+        CallNextHookEx, DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW, PostThreadMessageW,
         SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG,
         MSLLHOOKSTRUCT, SYSTEM_METRICS_INDEX, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP,
         WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
@@ -551,78 +619,78 @@ mod win_impl {
         let _ = input;
     }
 
-    pub fn playback(events: &[InputEvent]) -> i32 {
-        if events.is_empty() {
-            return 0;
+    fn inject_event(ev: &InputEvent) {
+        match ev.kind.as_str() {
+            "mouse_move" => {
+                if let (Some(x), Some(y)) = (ev.x, ev.y) {
+                    send_mouse(x, y, 0, 0);
+                }
+            }
+            "mouse_down" => {
+                let (x, y) = (ev.x.unwrap_or(0), ev.y.unwrap_or(0));
+                let f = match ev.button.as_deref() {
+                    Some("right") => MOUSEEVENTF_RIGHTDOWN.0,
+                    Some("middle") => MOUSEEVENTF_MIDDLEDOWN.0,
+                    _ => MOUSEEVENTF_LEFTDOWN.0,
+                };
+                send_mouse(x, y, f, 0);
+            }
+            "mouse_up" => {
+                let (x, y) = (ev.x.unwrap_or(0), ev.y.unwrap_or(0));
+                let f = match ev.button.as_deref() {
+                    Some("right") => MOUSEEVENTF_RIGHTUP.0,
+                    Some("middle") => MOUSEEVENTF_MIDDLEUP.0,
+                    _ => MOUSEEVENTF_LEFTUP.0,
+                };
+                send_mouse(x, y, f, 0);
+            }
+            "mouse_scroll" => {
+                let (x, y) = (ev.x.unwrap_or(0), ev.y.unwrap_or(0));
+                send_mouse(x, y, MOUSEEVENTF_WHEEL.0, ev.dy.unwrap_or(0));
+            }
+            "key_down" => {
+                if let Some(vk) = ev.vk {
+                    send_key(vk, false);
+                }
+            }
+            "key_up" => {
+                if let Some(vk) = ev.vk {
+                    send_key(vk, true);
+                }
+            }
+            _ => {}
         }
-        if ENGINE.playing.swap(true, Ordering::SeqCst) {
-            return -4;
-        }
-        let total = events.len() as u32;
-        let mut last = 0u64;
-        for (i, ev) in events.iter().enumerate() {
-            if !ENGINE.playing.load(Ordering::SeqCst) {
-                break;
-            }
-            let wait = ev.t_ms.saturating_sub(last).min(5000);
-            let mut slept = 0u64;
-            while slept < wait {
-                if !ENGINE.playing.load(Ordering::SeqCst) {
-                    break;
-                }
-                let slice = (wait - slept).min(50);
-                thread::sleep(Duration::from_millis(slice));
-                slept += slice;
-            }
-            if !ENGINE.playing.load(Ordering::SeqCst) {
-                break;
-            }
-            last = ev.t_ms;
-            emit_progress((i + 1) as u32, total);
-            match ev.kind.as_str() {
-                "mouse_move" => {
-                    if let (Some(x), Some(y)) = (ev.x, ev.y) {
-                        send_mouse(x, y, 0, 0);
-                    }
-                }
-                "mouse_down" => {
-                    let (x, y) = (ev.x.unwrap_or(0), ev.y.unwrap_or(0));
-                    let f = match ev.button.as_deref() {
-                        Some("right") => MOUSEEVENTF_RIGHTDOWN.0,
-                        Some("middle") => MOUSEEVENTF_MIDDLEDOWN.0,
-                        _ => MOUSEEVENTF_LEFTDOWN.0,
-                    };
-                    send_mouse(x, y, f, 0);
-                }
-                "mouse_up" => {
-                    let (x, y) = (ev.x.unwrap_or(0), ev.y.unwrap_or(0));
-                    let f = match ev.button.as_deref() {
-                        Some("right") => MOUSEEVENTF_RIGHTUP.0,
-                        Some("middle") => MOUSEEVENTF_MIDDLEUP.0,
-                        _ => MOUSEEVENTF_LEFTUP.0,
-                    };
-                    send_mouse(x, y, f, 0);
-                }
-                "mouse_scroll" => {
-                    let (x, y) = (ev.x.unwrap_or(0), ev.y.unwrap_or(0));
-                    send_mouse(x, y, MOUSEEVENTF_WHEEL.0, ev.dy.unwrap_or(0));
-                }
-                "key_down" => {
-                    if let Some(vk) = ev.vk {
-                        send_key(vk, false);
-                    }
-                }
-                "key_up" => {
-                    if let Some(vk) = ev.vk {
-                        send_key(vk, true);
-                    }
-                }
-                _ => {}
-            }
-        }
-        ENGINE.playing.store(false, Ordering::SeqCst);
-        0
     }
+
+    pub fn playback(events: &[InputEvent], cancelled: impl Fn() -> bool) -> i32 {
+        if cancelled() { return PLAYBACK_ABORTED; }
+        if events.is_empty() { return 0; }
+        if !ensure_hooks() { return -1; }
+        // Keep ownership until cleanup completes, even after Esc clears playing.
+        static PLAYBACK_LOCK: Mutex<()> = Mutex::new(());
+        let Ok(_session) = PLAYBACK_LOCK.try_lock() else { return -4; };
+        ENGINE.playing.store(true, Ordering::SeqCst);
+        let mut held = HeldInputs::default();
+        let result = run_timeline(
+            events,
+            || cancelled() || !ENGINE.playing.load(Ordering::SeqCst),
+            |event| { inject_event(event); held.track(event); },
+            emit_progress,
+        );
+        for mut event in held.releases() {
+            if event.kind == "mouse_up" {
+                let mut point = POINT::default();
+                if unsafe { GetCursorPos(&mut point).win_ok() } {
+                    event.x = Some(point.x);
+                    event.y = Some(point.y);
+                }
+            }
+            inject_event(&event);
+        }
+        let was_playing = ENGINE.playing.swap(false, Ordering::SeqCst);
+        if !was_playing || cancelled() { PLAYBACK_ABORTED } else { result }
+    }
+
 }
 
 #[cfg(not(windows))]
@@ -632,7 +700,7 @@ mod win_impl {
         true
     }
     pub fn stop_hooks_message() {}
-    pub fn playback(_events: &[InputEvent]) -> i32 {
+    pub fn playback(_events: &[InputEvent], _cancelled: impl Fn() -> bool) -> i32 {
         -1
     }
 }
@@ -703,12 +771,17 @@ pub extern "C" fn recorder_play(json_ptr: *const c_char) -> c_int {
     if json_ptr.is_null() {
         return -2;
     }
-    let json = unsafe { CStr::from_ptr(json_ptr) }.to_string_lossy();
+    play_json_until(unsafe { CStr::from_ptr(json_ptr) }, || false)
+}
+
+/// Rust hosts can cancel before native playback starts, including between loops.
+pub fn play_json_until(json: &CStr, cancelled: impl Fn() -> bool) -> c_int {
+    let json = json.to_string_lossy();
     let events: Vec<InputEvent> = match serde_json::from_str(&json) {
         Ok(v) => v,
         Err(_) => return -3,
     };
-    win_impl::playback(&events)
+    win_impl::playback(&events, cancelled)
 }
 
 #[no_mangle]
@@ -721,6 +794,62 @@ pub extern "C" fn recorder_shutdown() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_waits_and_injection_time_preserve_timeline() {
+        let clock = std::cell::Cell::new(0u64);
+        let mut sent_at = Vec::new();
+        let mut progress = Vec::new();
+        let events = vec![InputEvent { t_ms: 12_000, ..Default::default() }, InputEvent { t_ms: 20_000, ..Default::default() }];
+        let result = run_timeline_clocked(&events, || false,
+            |_| { sent_at.push(clock.get()); clock.set(clock.get() + 100); },
+            |i, total| progress.push((i, total)),
+            || clock.get(), |ms| clock.set(clock.get() + ms));
+        assert_eq!(result, 0);
+        assert_eq!(sent_at, vec![12_000, 20_000]);
+        assert_eq!(progress, vec![(1, 2), (2, 2)]);
+    }
+
+    #[test]
+    fn cancellation_interrupts_wait_without_sending_pending_event() {
+        let clock = std::cell::Cell::new(0u64);
+        let mut sent = 0;
+        let events = vec![InputEvent { t_ms: 0, ..Default::default() }, InputEvent { t_ms: 60_000, ..Default::default() }];
+        let result = run_timeline_clocked(&events, || clock.get() >= 100,
+            |_| sent += 1, |_, _| {}, || clock.get(), |ms| clock.set(clock.get() + ms));
+        assert_eq!(result, PLAYBACK_ABORTED);
+        assert_eq!(sent, 1);
+        assert_eq!(clock.get(), 100);
+    }
+
+    #[test]
+    fn cancelled_before_start_sends_nothing() {
+        let events = vec![InputEvent::default()];
+        assert_eq!(run_timeline(&events, || true, |_| panic!("must not inject"), |_, _| panic!("must not report progress")), PLAYBACK_ABORTED);
+    }
+
+    #[test]
+    fn cleanup_releases_unmatched_keys_and_buttons_once() {
+        let mut held = HeldInputs::default();
+        let key = InputEvent { kind: "key_down".into(), vk: Some(17), ..Default::default() };
+        held.track(&key);
+        held.track(&key);
+        held.track(&InputEvent { kind: "mouse_down".into(), button: Some("left".into()), ..Default::default() });
+        let releases = held.releases();
+        assert_eq!(releases.len(), 2);
+        assert_eq!(releases[0].kind, "key_up");
+        assert_eq!(releases[0].vk, Some(17));
+        assert_eq!(releases[1].kind, "mouse_up");
+    }
+
+    #[test]
+    fn paired_inputs_require_no_cleanup() {
+        let mut held = HeldInputs::default();
+        for kind in ["key_down", "key_up", "mouse_down", "mouse_up"] {
+            held.track(&InputEvent { kind: kind.into(), vk: Some(65), ..Default::default() });
+        }
+        assert!(held.releases().is_empty());
+    }
 
     // Mirrors the exact payload shape produced by Python's InputEvent.to_dict:
     // None fields are omitted entirely, so keys are missing from the JSON.
